@@ -2,7 +2,7 @@
 
 Independent TypeScript / discord.js bot for sharing Amazon product links. **The current priority is API-free V1. Creators API / PA-API is deferred to a later version.** No Amazon API credentials or product API eligibility are required by this version.
 
-> **v0.4.0 development branch, not a production release.** New source includes Basic/Affiliate setup and reviewed product posts. The dependency-free core check passes; the full Discord/SQLite build and Vitest suite remain unverified because npm dependency installation failed. See [implementation status](IMPLEMENTATION_STATUS.md) before deployment.
+> **v0.4.0 development branch, not a production release.** Basic/Affiliate setup and reviewed product posts are implemented. [GitHub Actions run 36629486245](https://github.com/Duy-Phan96/amazon-affiliate-discord-bot/actions/runs/36629486245) successfully installed dependencies, passed 35 core tests, compiled the full TypeScript project and passed all 14 Vitest tests including SQLite. A real Discord test-server walkthrough, reviewed lockfile and deployment/compliance checks remain outstanding. See [implementation status](IMPLEMENTATION_STATUS.md).
 
 ## What this branch contains
 
@@ -72,4 +72,4 @@ Short URLs such as `amzn.to` are not resolved by this release. Open them yoursel
 
 The parked [Creators API test brief](docs/CODEX_CREATORS_API_TEST.md) is for a later version and must be rechecked against current official documentation when work resumes. There is no `amazon:api:test` command. No API credentials belong in this version's setup.
 
-See [V1 acceptance criteria](docs/V1_SCOPE.md), [architecture](ARCHITECTURE.md), [security](SECURITY.md), [agent instructions](AGENTS.md) and [validation/known gaps](IMPLEMENTATION_STATUS.md). Do not deploy publicly until full build/tests, the Discord walkthrough and the actual Amazon/advertising usage review are complete. This project is not endorsed or approved by Amazon.
+See [V1 acceptance criteria](docs/V1_SCOPE.md), [architecture](ARCHITECTURE.md), [security](SECURITY.md), [agent instructions](AGENTS.md) and [validation/known gaps](IMPLEMENTATION_STATUS.md). The first full automated build/test run passed; do not deploy publicly until the Discord walkthrough, reviewed lockfile and the actual Amazon/advertising usage review are also complete. This project is not endorsed or approved by Amazon.

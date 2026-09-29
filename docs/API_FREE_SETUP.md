@@ -1,6 +1,6 @@
 # Schritt für Schritt: Produktlinks ohne Amazon-API
 
-Stand dieser Anleitung: 29.09.2026. Sie beschreibt den v0.4-Entwicklungszweig. Vollständiger Build, Datenbanktests und Discord-Praxistest müssen vor einem öffentlichen Einsatz erfolgreich abgeschlossen werden. Die aktuelle V1-Priorität ist API-frei; Creators API kommt später.
+Stand dieser Anleitung: 29.09.2026. Sie beschreibt den v0.4-Entwicklungszweig. Der vollständige Build und alle 49 automatisierten Tests einschließlich Datenbanktests sind auf GitHub erfolgreich durchgelaufen. Vor öffentlichem Einsatz fehlen noch insbesondere der Discord-Praxistest, eine geprüfte Lockdatei und die Prüfung der konkreten Nutzung; siehe [Entwicklungsstatus](../IMPLEMENTATION_STATUS.md). Die aktuelle V1-Priorität ist API-frei; Creators API kommt später.
 
 ## 1. Welcher Modus passt zu dir?
 

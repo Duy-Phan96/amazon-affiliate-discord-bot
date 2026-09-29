@@ -16,7 +16,7 @@ Based on imported v0.3 commit `9f98cbee11393bb3352a1931415f594defa9a6a4`. The us
 - Safe top-level error handling and no raw SDK exception dumps.
 - Updated scope, agent instructions, README and German beginner guide with official source links.
 
-## Validation actually performed
+## Local validation initially performed
 
 Environment: Node.js 22.16.0 and globally available TypeScript 5.8.3.
 
@@ -30,16 +30,29 @@ A supplemental Python SQLite check ran the extracted schema plus additive column
 
 `npm test`: exit 127 — Vitest not installed. Existing and new SQLite/Vitest tests NOT executed here. No lockfile fabricated.
 
+## GitHub Actions validation subsequently completed
+
+[Run 36629486245](https://github.com/Duy-Phan96/amazon-affiliate-discord-bot/actions/runs/36629486245), job `validate` / `109614773055`, completed successfully on 2026-09-29 at 20:53:36 UTC. The PR check tested implementation commit `168801cc84970a14853f48e77c69da41482a3ade` against main `c397debf7712abc238d751dcfbb6138fef65369e` via synthetic merge `de9bff9838714e4821ec5393b77157d3f5eb0315`.
+
+Environment: Ubuntu 24.04, Node.js 22.23.3, npm 10.9.9. The following commands all completed successfully:
+
+- `npm install --no-audit --no-fund`.
+- `npm run test:core`: 35 passed, 0 failed.
+- `npm run build`: complete TypeScript build succeeded.
+- `npm test`: 14 passed across three test files, including all seven new API-free/SQLite tests, two existing database tests and five existing Amazon-link tests.
+
+This resolves the previously unverified full build and persistence tests. It does not establish live Discord behavior, Amazon approval, security-audit coverage or a reproducible dependency lockfile. No lockfile was committed from this run. The runner also reported deprecated action runtimes and `prebuild-install`; dependency/action maintenance remains a release review item.
+
 No actual Discord login, message publication or Amazon access test was performed. No user secrets or real tracking IDs were added to defaults.
 
 ## Must complete before merge/release
 
-1. Successful dependency installation, reviewed lockfile, full build and Vitest suite.
+1. Generate and review a dependency lockfile, use reproducible installation and rerun checks. The initial full build and all automated tests have now passed on GitHub Actions.
 2. Discord test-server walkthrough of every setup/product path, runtime permission revocation, old controls, double click, preview/config conflict, restart and uncertain send handling.
 3. Review extra marketplace requirements, settings recovery and delivery retention/reconciliation. Current UI supports only DE/US/UK and 1–5 text channels.
 4. Verify the actual Amazon/Discord usage, OneLink behavior and account/site disclosure with the operator; the bot does not certify them.
 
-Transient drafts expire on restart; there is no draft-resumption feature. There is no automatic retry/reconciliation or cleanup of delivery records, no global spam quota, and no multi-process deployment guarantee. Product drafts have no in-place edit step; cancel and reopen to change the contents. Other source limitations may be found by the unexecuted integration checks.
+Transient drafts expire on restart; there is no draft-resumption feature. There is no automatic retry/reconciliation or cleanup of delivery records, no global spam quota, and no multi-process deployment guarantee. Product drafts have no in-place edit step; cancel and reopen to change the contents. Other source limitations may be found by the still-unexecuted live Discord walkthrough.
 
 ## Deferred, not implemented
 
