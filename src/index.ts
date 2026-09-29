@@ -1,0 +1,14 @@
+import 'dotenv/config';
+import { Client, GatewayIntentBits, REST, Routes } from 'discord.js';
+import { AppDatabase } from './persistence/Database.js';
+import { ConfigRepository } from './repositories/ConfigRepository.js';
+import { AmazonDiscordController } from './discord/AmazonDiscordController.js';
+import { amazonCommand } from './discord/commands.js';
+const token=process.env.DISCORD_TOKEN;if(!token)throw new Error('DISCORD_TOKEN is required');
+const clientId=process.env.DISCORD_CLIENT_ID;if(!clientId)throw new Error('DISCORD_CLIENT_ID is required');
+const db=new AppDatabase();const repo=new ConfigRepository(db);
+const client=new Client({intents:[GatewayIntentBits.Guilds,GatewayIntentBits.GuildMessages,GatewayIntentBits.MessageContent]});
+new AmazonDiscordController(client,repo).register();
+client.once('ready',()=>console.log(`Amazon bot ready as ${client.user?.tag}`));
+await new REST({version:'10'}).setToken(token).put(process.env.DISCORD_GUILD_ID?Routes.applicationGuildCommands(clientId,process.env.DISCORD_GUILD_ID):Routes.applicationCommands(clientId),{body:[amazonCommand.toJSON()]});
+await client.login(token);
