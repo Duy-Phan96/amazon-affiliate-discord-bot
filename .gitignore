@@ -1,0 +1,33 @@
+# Dependencies and generated output
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+
+# Local environments; only the empty example belongs in Git
+.env
+.env.*
+!.env.example
+
+# Runtime state, logs and local databases
+data/
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+*.db
+*.db-*
+*.log
+
+# Credentials and private keys
+credentials/
+secrets/
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Local archives and OS files
+*.zip
+.DS_Store
+Thumbs.db
