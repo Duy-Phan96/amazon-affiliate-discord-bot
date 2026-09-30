@@ -1,0 +1,30 @@
+# Build allowlist.
+**
+!Dockerfile
+!package.json
+!package-lock.json
+!tsconfig*.json
+!.gitignore
+!src/
+!src/**
+!tests/
+!tests/**
+!scripts/
+!scripts/**
+# Never send secrets/runtime state into the Docker build context.
+**/.env
+**/.env.*
+**/.git
+**/node_modules
+**/credentials
+**/secrets
+**/*.pem
+**/*.key
+**/*.p12
+**/*.pfx
+**/*.sqlite
+**/*.sqlite-*
+**/*.sqlite3
+**/*.db
+**/*.db-*
+**/*.log

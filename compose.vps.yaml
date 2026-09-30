@@ -1,0 +1,40 @@
+# Run from /opt/amazon-affiliate/app:
+# docker compose --env-file ../.env -f compose.vps.yaml ...
+name: amazon-affiliate
+services:
+  bot:
+    image: amazon-affiliate:server-test
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    user: "${BOT_UID:?Set BOT_UID in ../.env}:${BOT_GID:?Set BOT_GID in ../.env}"
+    env_file:
+      - ../.env
+    environment:
+      NODE_ENV: production
+      DATABASE_PATH: /data/amazon.sqlite
+      HOME: /tmp
+      NPM_CONFIG_CACHE: /tmp/.npm
+    volumes:
+      - ../data:/data:rw,z
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 30s
+    pids_limit: 128
+    mem_limit: 512m
+    cpus: "1.0"
+    labels:
+      traefik.enable: "false"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
