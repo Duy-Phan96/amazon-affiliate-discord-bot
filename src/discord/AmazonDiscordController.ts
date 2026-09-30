@@ -173,7 +173,17 @@ export class AmazonDiscordController {
       draft.step = c.productMode === 'AFFILIATE' ? 'tags' : 'channels';
     } else if (action === 'open_tags' && i.isButton()) {
       this.setup.requireStep(draft, 'tags');
-      return i.showModal(new ModalBuilder().setCustomId(`amazon:setup:${id}:tags`).setTitle('Marketplace tracking IDs').addComponents(...c.marketplaces.map(m => new ActionRowBuilder<TextInputBuilder>().addComponents(new TextInputBuilder().setCustomId(m).setLabel(`${LABELS[m]} tracking ID`).setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(100)))));
+      return i.showModal(new ModalBuilder().setCustomId(`amazon:setup:${id}:tags`).setTitle('Marketplace tracking IDs').addComponents(...c.marketplaces.map(m => {
+        const input = new TextInputBuilder()
+          .setCustomId(m)
+          .setLabel(`${LABELS[m]} tracking ID`)
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true)
+          .setMaxLength(100);
+        const saved = c.tags[m]?.trim();
+        if (saved) input.setValue(saved.slice(0, 100));
+        return new ActionRowBuilder<TextInputBuilder>().addComponents(input);
+      })));
     } else if (action === 'tags' && i.isModalSubmit()) {
       this.setup.requireStep(draft, 'tags');
       const tags = Object.fromEntries(c.marketplaces.map(m => [m, i.fields.getTextInputValue(m).trim()]));
