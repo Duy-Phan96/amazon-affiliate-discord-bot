@@ -10,6 +10,20 @@ export class AppDatabase {
     CREATE TABLE IF NOT EXISTS link_channels (guild_id TEXT NOT NULL, channel_id TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, PRIMARY KEY(guild_id, channel_id));
     CREATE TABLE IF NOT EXISTS product_watches (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id TEXT NOT NULL, channel_id TEXT NOT NULL, marketplace TEXT NOT NULL, asin TEXT NOT NULL, canonical_url TEXT NOT NULL, watch_type TEXT NOT NULL, threshold_value REAL, last_known_price REAL, last_known_discount REAL, last_alerted_price REAL, last_alerted_discount REAL, last_checked_at TEXT, enabled INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS deal_posts (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id TEXT NOT NULL, channel_id TEXT NOT NULL, marketplace TEXT NOT NULL, asin TEXT NOT NULL, price REAL, discount REAL, posted_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS amazon_program_templates (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      guild_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      program_key TEXT NOT NULL,
+      channel_id TEXT,
+      body TEXT NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      created_by TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS amazon_program_templates_guild_enabled
+      ON amazon_program_templates(guild_id, enabled, updated_at);
     CREATE TABLE IF NOT EXISTS link_deliveries (
       guild_id TEXT NOT NULL, event_id TEXT NOT NULL, channel_id TEXT NOT NULL,
       product_key TEXT NOT NULL, state TEXT NOT NULL, message_id TEXT, created_at INTEGER NOT NULL,

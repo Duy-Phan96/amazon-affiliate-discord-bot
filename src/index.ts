@@ -3,6 +3,7 @@ import { Client, GatewayIntentBits } from 'discord.js';
 import { AppDatabase } from './persistence/Database.js';
 import { ConfigRepository } from './repositories/ConfigRepository.js';
 import { DeliveryRepository } from './repositories/DeliveryRepository.js';
+import { AmazonProgramTemplateRepository } from './repositories/AmazonProgramTemplateRepository.js';
 import { AmazonDiscordController } from './discord/AmazonDiscordController.js';
 async function main() {
   const token = process.env.DISCORD_TOKEN;
@@ -11,7 +12,7 @@ async function main() {
   if (!token || !clientId || !/^\d{17,20}$/.test(clientId) || (guildId && !/^\d{17,20}$/.test(guildId))) throw new Error('Invalid Discord environment configuration');
   const db = new AppDatabase();
   const client = new Client({ rest: { timeout: 15_000, retries: 0 }, intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] });
-  new AmazonDiscordController(client, new ConfigRepository(db), new DeliveryRepository(db), guildId).register();
+  new AmazonDiscordController(client, new ConfigRepository(db), new DeliveryRepository(db), guildId, new AmazonProgramTemplateRepository(db)).register();
   client.on('error', () => console.warn(JSON.stringify({ event: 'discord_client_error' })));
   client.once('ready', () => {
     if (client.user?.id !== clientId) {

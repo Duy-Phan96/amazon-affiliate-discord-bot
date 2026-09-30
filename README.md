@@ -54,3 +54,35 @@ The earlier v0.4 implementation passed 35 core plus 14 Vitest tests. Do not use 
 [Server test](docs/SERVER_TEST.md) · [Beginner guide](docs/API_FREE_SETUP.md) · [Implementation status](IMPLEMENTATION_STATUS.md) · [Architecture](ARCHITECTURE.md) · [Scope](docs/V1_SCOPE.md) · [Security](SECURITY.md) · [Agent instructions](AGENTS.md).
 
 The [Creators API diagnostic brief](docs/CODEX_CREATORS_API_TEST.md) is parked for a later version. Website, paid features, bounties and monitoring remain deferred. Do not deploy publicly until live Discord behavior, dependencies and the actual commercial usage are reviewed.
+
+
+## Amazon Programs / Bounties
+
+This feature is separate from normal product links.
+
+Normal product links:
+- start from an Amazon product URL / ASIN;
+- use the matching marketplace tracking ID.
+
+Amazon Programs:
+- use dedicated Amazon landing pages;
+- currently support Amazon Visa, Amazon Prime and Prime Student for Amazon.de;
+- generate the final program URL from the guild's CURRENT saved Amazon.de tracking ID;
+- do not require Creators API / PA-API.
+
+Use `/amazon programs` as an administrator to:
+- choose a supported program;
+- view the current affiliate link privately;
+- create a Markdown-style Discord post;
+- preview before publishing;
+- save reusable templates.
+
+Supported placeholders:
+- `{affiliate_link}`
+- `{program_name}`
+
+Program payouts, bounty amounts, campaign periods and eligibility are intentionally not hardcoded. Amazon can change them. The bot links to the relevant PartnerNet information page instead.
+
+OneLink is optional and separate. It is not required to generate a program link and does not replace a missing marketplace tracking ID.
+
+Recurring schedules such as “post Amazon Visa every 4 days” are intentionally deferred to the next slice after program posts/templates are live-tested.

@@ -7,6 +7,7 @@ export const amazonCommand = new SlashCommandBuilder()
     .addStringOption(o => o.setName('url').setDescription('Full amazon.de / amazon.com / amazon.co.uk product URL, not a short link').setRequired(true).setMaxLength(1500)))
   .addSubcommand(s => s.setName('setup').setDescription('Configure Affiliate or Basic mode, stores and channels'))
   .addSubcommand(s => s.setName('product').setDescription('Preview and publish your affiliate product link with optional text'))
+  .addSubcommand(s => s.setName('programs').setDescription('Create and manage Amazon program affiliate posts and templates'))
   .addSubcommand(s => s.setName('settings').setDescription('Show saved Amazon settings'))
   .addSubcommand(s => s.setName('guide').setDescription('Explain tracking IDs, OneLink and disclosures'))
   .addSubcommand(s => s.setName('status').setDescription('Show API-free bot and delivery status'));
