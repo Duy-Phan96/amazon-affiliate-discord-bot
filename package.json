@@ -1,6 +1,6 @@
 {
   "name": "amazon-affiliate-discord-bot",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "private": true,
   "type": "module",
   "scripts": {
@@ -8,7 +8,10 @@
     "build": "tsc",
     "test": "vitest run",
     "start": "node dist/index.js",
-    "test:core": "tsc -p tsconfig.core.json && node --test tests/core-check.mjs"
+    "test:core": "tsc -p tsconfig.core.json && node --test tests/core-check.mjs",
+    "test:tooling": "node --test tests/tooling-check.mjs",
+    "doctor": "node scripts/doctor.mjs",
+    "commands:register": "node scripts/register-guild.mjs"
   },
   "dependencies": {
     "discord.js": "^14.16.3",
@@ -23,7 +26,5 @@
     "@types/node": "^22.10.2",
     "@types/better-sqlite3": "^7.6.12"
   },
-  "engines": {
-    "node": ">=22.12.0"
-  }
+  "engines": { "node": ">=22.12.0" }
 }

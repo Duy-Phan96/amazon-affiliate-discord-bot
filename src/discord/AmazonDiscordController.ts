@@ -11,13 +11,14 @@ import { MARKETPLACES, type MarketplaceCode } from '../domain/amazon.js';
 import type { SetupConfig, LinkMode, ProductMode } from '../domain/config.js';
 import { DraftStore, type Draft } from '../services/DraftStore.js';
 import { ProductLinkService } from '../services/ProductLinkService.js';
+import { hasAffiliateTag } from '../services/MessageLinkPolicy.js';
 import { UserInputError, validateSetup } from '../services/SetupValidation.js';
 
 type UI = ChatInputCommandInteraction | MessageComponentInteraction | ModalSubmitInteraction;
 type SetupData = { config: SetupConfig; revision: number };
 type ProductData = { url: string; title: string; note: string; channel?: string; revision: number };
 const LABELS = { DE: 'Amazon.de', US: 'Amazon.com', UK: 'Amazon.co.uk' };
-const ONE_LINK = 'https://partnernet.amazon.de/help/node/topic/GKHRXG4YEJBTCAFC';
+const ONE_LINK = 'https://affiliate-program.amazon.com/help/node/topic/GKHRXG4YEJBTCAFC';
 const DISCLOSURE_GUIDE = 'https://partnernet.amazon.de/help/node/topic/GHQNZAU6669EZS98';
 const DISCLOSURE = 'Anzeige / Ad · Affiliate link\nAs an Amazon Associate I earn from qualifying purchases.\nAls Amazon-Partner verdiene ich an qualifizierten Verkäufen.';
 const NO_MENTIONS = { parse: [] as never[], repliedUser: false };
@@ -29,7 +30,7 @@ export class AmazonDiscordController {
   private setup = new DraftStore<SetupData>();
   private products = new DraftStore<ProductData>();
   private links: ProductLinkService;
-  constructor(private client: Client, private repo: ConfigRepository, private deliveries: DeliveryRepository) { this.links = new ProductLinkService(repo); }
+  constructor(private client: Client, private repo: ConfigRepository, private deliveries: DeliveryRepository, private allowedGuildId?: string) { this.links = new ProductLinkService(repo); }
   register() {
     this.client.on(Events.InteractionCreate, i => { void this.handle(i).catch(() => console.warn(JSON.stringify({ event: 'interaction_response_failed' }))); });
     this.client.on(Events.MessageCreate, m => { void this.onMessage(m).catch(() => console.warn(JSON.stringify({ event: 'automatic_link_failed' }))); });
@@ -43,6 +44,7 @@ export class AmazonDiscordController {
   private async handle(i: Interaction) {
     if (!(i.isChatInputCommand() || i.isMessageComponent() || i.isModalSubmit())) return;
     if (i.isChatInputCommand() ? i.commandName !== 'amazon' : !i.customId.startsWith('amazon:')) return;
+    if (this.allowedGuildId && i.guildId !== this.allowedGuildId) return;
     try {
       if (!i.guildId || !i.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) throw new UserInputError('Use this in a server where you have Manage Server permission.');
       if (i.isChatInputCommand()) return await this.command(i);
@@ -61,6 +63,12 @@ export class AmazonDiscordController {
   private async command(i: ChatInputCommandInteraction) {
     const guildId = i.guildId!;
     const sub = i.options.getSubcommand();
+    if (sub === 'link') {
+      const result = this.links.generate(guildId, i.options.getString('url', true).trim());
+      const oneLink = this.repo.listMarketplaces(guildId).some(m => m.marketplace === result.marketplace && m.enabled && m.onelink_enabled);
+      const content = `**${result.affiliate ? 'Your affiliate link' : 'Your product link'} — only visible to you**\n<${result.url}>\n\n${result.affiliate ? DISCLOSURE : 'Basic mode: no affiliate tag added.'}\n\nSource: ${LABELS[result.marketplace]} · ASIN ${result.asin}\n${oneLink && result.affiliate ? 'OneLink: declared by you; redirection and commission are not verified.' : 'OneLink is not required to generate this link.'}\n\nCopy the link together with its disclosure, or use /amazon product for a reviewed channel post. No public message was sent.`;
+      return this.show(i, content, [buttons(link(result.url, 'Open on Amazon'), link(ONE_LINK, 'OneLink guide'))]);
+    }
     if (sub === 'setup') {
       const current = this.repo.getGuild(guildId);
       const active = this.repo.listMarketplaces(guildId).filter(m => m.enabled);
@@ -77,11 +85,11 @@ export class AmazonDiscordController {
       this.products.create(i.id, guildId, i.user.id, 'details', { url: '', title: '', note: '', revision: this.repo.getGuild(guildId).revision });
       return i.showModal(this.productModal(i.id));
     }
-    if (sub === 'guide') return this.show(i, '**API-free setup**\nBasic: normal product links, no partner account needed.\nAffiliate: your own real tracking IDs, per marketplace.\nOneLink is optional and set up with Amazon, not by this bot. A saved declaration does not verify Discord redirection or account approval.\n\nUse /amazon setup, then /amazon product for a preview before posting. Use your own title/note; no live prices, pictures or deal discovery are fetched.\n\nAffiliate users must check that their actual Discord/site usage is accepted by Amazon and disclose their commercial links. Basic mode is not a blanket exemption from advertising rules.', [buttons(link(ONE_LINK, 'Amazon OneLink guide'), link(DISCLOSURE_GUIDE, 'Why disclose affiliate links?'))]);
+    if (sub === 'guide') return this.show(i, '**Affiliate links — no product API needed**\nUse /amazon link url:<full product URL> to get your link privately. Use /amazon product for a preview before a public post. With BUTTON or REPLY enabled, new untagged Amazon links in configured channels receive a bot reply automatically. Already-tagged links are skipped automatically.\n\nAffiliate mode uses your real ID for each original marketplace. Basic mode remains available without a partner account. Only full DE/US/UK product URLs are supported; expand amzn.to / amzn.eu links yourself. A product name alone is not a product lookup.\n\nOneLink is optional and configured with Amazon. A saved declaration does not verify Discord redirection or account approval. No live prices, pictures or deals are fetched. Check that your actual Discord/site usage is accepted by Amazon and provide the separate account/site disclosure.', [buttons(link(ONE_LINK, 'Amazon OneLink guide'), link(DISCLOSURE_GUIDE, 'Why disclose affiliate links?'))]);
     const g = this.repo.getGuild(guildId);
     const markets = this.repo.listMarketplaces(guildId).filter(m => m.enabled);
     const channels = this.repo.listLinkChannels(guildId);
-    const content = `**Amazon ${sub === 'status' ? 'Status' : 'Settings'}**\nMode: ${g.product_mode}\nLink behavior: ${g.link_mode}\nMarketplaces: ${markets.map(m => LABELS[m.marketplace]).join(', ') || 'Not configured'}\nChannels: ${channels.map(c => `<#${c.channel_id}>`).join(', ') || 'Not configured'}\nOneLink: ${markets.some(m => m.onelink_enabled) ? 'Declared by operator; not verified' : 'Not declared / not used'}\n\nAPI access is not required for this version.\nUnresolved delivery attempts: ${this.deliveries.unresolved(guildId)}\nUse /amazon setup to edit and /amazon product to compose a post.`;
+    const content = `**Amazon ${sub === 'status' ? 'Status' : 'Settings'}**\nMode: ${g.product_mode}\nLink behavior: ${g.link_mode}\nMarketplaces: ${markets.map(m => LABELS[m.marketplace]).join(', ') || 'Not configured'}\nChannels: ${channels.map(c => `<#${c.channel_id}>`).join(', ') || 'Not configured'}\nOneLink: ${markets.some(m => m.onelink_enabled) ? 'Declared by operator; not verified' : 'Not declared / not used'}\nServer scope: ${this.allowedGuildId ? 'Restricted to this test server' : 'Configured servers'}\n\nAPI access is not required for this version.\nUnresolved delivery attempts: ${this.deliveries.unresolved(guildId)}\nUse /amazon setup to edit, /amazon link for a private link, or /amazon product to compose a post.`;
     return this.show(i, content, [buttons(link(ONE_LINK, 'OneLink setup'), link(DISCLOSURE_GUIDE, 'Disclosure guide'))]);
   }
   private async setupView(i: UI, id: string, draft: Draft<SetupData>) {
@@ -90,8 +98,8 @@ export class AmazonDiscordController {
     const rows: ActionRowBuilder<MessageActionRowComponentBuilder>[] = [];
     let content = '';
     if (draft.step === 'mode') {
-      content = '**Step 1 / 6 — What do you need?**\nBasic: share products without affiliate tracking or an Associates account.\nAffiliate: add your own marketplace tracking IDs. No product API is needed.\nNothing changes until you review and save.';
-      rows.push(new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(new StringSelectMenuBuilder().setCustomId(key('mode')).setPlaceholder('Choose Basic or Affiliate').addOptions({ label: 'Basic — no partner account', value: 'BASIC' }, { label: 'Affiliate — my tracking IDs', value: 'AFFILIATE' })));
+      content = '**Step 1 / 6 — What do you need?**\nAffiliate: turn product URLs into your own affiliate links. No product API is needed.\nBasic: share products without tracking or an Associates account.\nNothing changes until you review and save.';
+      rows.push(new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(new StringSelectMenuBuilder().setCustomId(key('mode')).setPlaceholder('Choose Affiliate or Basic').addOptions({ label: 'Affiliate — my tracking IDs', value: 'AFFILIATE' }, { label: 'Basic — no partner account', value: 'BASIC' })));
     } else if (draft.step === 'marketplaces') {
       content = '**Step 2 / 6 — Choose marketplaces**\nOnly select the stores you intend to use. Product domains are never swapped. This release supports DE, US and UK.';
       rows.push(new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(new StringSelectMenuBuilder().setCustomId(key('marketplaces')).setPlaceholder('Select marketplaces').setMinValues(1).setMaxValues(3).addOptions(...Object.keys(MARKETPLACES).map(code => ({ label: LABELS[code as MarketplaceCode], value: code, default: c.marketplaces.includes(code as MarketplaceCode) })))));
@@ -105,8 +113,8 @@ export class AmazonDiscordController {
       content = '**Step 4 / 6 — Product channels**\nChoose 1–5 text channels for manual posts and optional automatic link replies. Saving replaces the previous enabled channel selection.';
       rows.push(new ActionRowBuilder<ChannelSelectMenuBuilder>().addComponents(new ChannelSelectMenuBuilder().setCustomId(key('channels')).setPlaceholder('Choose product channels').setChannelTypes(ChannelType.GuildText).setMinValues(1).setMaxValues(5)));
     } else if (draft.step === 'behavior') {
-      content = '**Step 5 / 6 — Automatic link replies**\nButtons or replies operate only in your selected channels. Off still allows reviewed manual product posts. Original member messages stay untouched.';
-      rows.push(new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(new StringSelectMenuBuilder().setCustomId(key('behavior')).setPlaceholder('Choose behavior').addOptions({ label: 'Off — manual posts only', value: 'OFF' }, { label: 'Compact Amazon button', value: 'BUTTON' }, { label: 'Reply with product link', value: 'REPLY' })));
+      content = '**Step 5 / 6 — Automatic link replies**\nButtons or replies operate only in your selected channels. Off still allows private link generation and reviewed manual posts. Already-tagged links are skipped automatically. Original member messages stay untouched.';
+      rows.push(new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(new StringSelectMenuBuilder().setCustomId(key('behavior')).setPlaceholder('Choose behavior').addOptions({ label: 'Off — manual posts only', value: 'OFF' }, { label: 'Compact Amazon button', value: 'BUTTON' }, { label: 'Reply with affiliate / product link', value: 'REPLY' })));
     } else if (draft.step === 'review') {
       content = `**Step 6 / 6 — Review before saving**\nMode: ${c.productMode}\n${c.marketplaces.map(m => `${LABELS[m]}: ${c.productMode === 'AFFILIATE' ? c.tags[m] : 'No affiliate tag'}`).join('\n')}\nOneLink: ${c.oneLinkDeclared ? 'Operator declaration only' : 'Not used'}\nChannels: ${c.channels.map(v => `<#${v}>`).join(', ')}\nAutomatic replies: ${c.linkMode}\n\n${c.productMode === 'AFFILIATE' ? '**Every affiliate post includes:**\n' + DISCLOSURE + '\n\nBy saving, you confirm you checked the applicable Amazon site/Discord usage and disclosure requirements. This is not verification or approval by Amazon.' : 'No affiliate tracking or commission statement is added. Commercial promotions can still need advertising disclosure.'}\n\nUnselected old channels/marketplaces will be disabled. No Discord channels or member messages are deleted.`;
       rows.push(buttons(button(key('save'), 'Save configuration', ButtonStyle.Success), link(DISCLOSURE_GUIDE, 'Disclosure requirements')));
@@ -158,7 +166,7 @@ export class AmazonDiscordController {
       try {
         for (const channel of c.channels) await this.targetChannel(i.guildId!, channel, i.user.id);
         this.repo.saveSetup(i.guildId!, c, draft.data.revision);
-        await this.show(i, 'Configuration saved. Use /amazon product to preview a product post, or /amazon settings to inspect your configuration.');
+        await this.show(i, 'Configuration saved. Use /amazon link to generate your link, /amazon product to preview a public post, or /amazon settings to inspect your configuration.');
       } finally { this.setup.remove(id); }
       return;
     } else throw new UserInputError('This control is no longer current. Start /amazon setup again.');
@@ -233,23 +241,27 @@ export class AmazonDiscordController {
     return channel;
   }
   private async onMessage(m: Message) {
+    if (this.allowedGuildId && m.guildId !== this.allowedGuildId) return;
     if (m.author.bot || m.webhookId || !m.guildId || !this.repo.isLinkChannel(m.guildId, m.channelId)) return;
     const mode = this.repo.getGuild(m.guildId).link_mode;
     if (mode === 'OFF') return;
     for (const raw of (m.content.match(/https?:\/\/[^\s<>]+/g) ?? []).slice(0, 10)) {
+      const input = raw.replace(/[),.!?;]+$/, '');
+      // Do not automatically take over another publisher's attribution or repost our own tagged links.
+      if (hasAffiliateTag(input)) continue;
       let result: ReturnType<ProductLinkService['generate']>;
-      try { result = this.links.generate(m.guildId, raw.replace(/[),.!?;]+$/, '')); } catch (e) { if (e instanceof UserInputError) continue; throw e; }
+      try { result = this.links.generate(m.guildId, input); } catch (e) { if (e instanceof UserInputError) continue; throw e; }
       await this.targetChannel(m.guildId, m.channelId);
       // Settings may change during permission fetching; re-read before publication.
       if (!this.repo.isLinkChannel(m.guildId, m.channelId) || this.repo.getGuild(m.guildId).link_mode !== mode) return;
-      result = this.links.generate(m.guildId, raw.replace(/[),.!?;]+$/, ''));
+      result = this.links.generate(m.guildId, input);
       if (!this.deliveries.reserve(m.guildId, `auto:${m.id}`, m.channelId, result.canonicalUrl, 60_000)) return;
       try {
-        const content = `${result.affiliate ? DISCLOSURE : 'Amazon product link · No affiliate tag added.'}${mode === 'REPLY' ? `\n<${result.url}>` : ''}`;
+        const content = `${result.affiliate ? '**Amazon affiliate link**\n' + DISCLOSURE : 'Amazon product link · No affiliate tag added.'}${mode === 'REPLY' ? `\n<${result.url}>` : ''}`;
         const reply = await m.reply({ content, components: mode === 'BUTTON' ? [buttons(link(result.url, 'View on Amazon'))] : [], allowedMentions: NO_MENTIONS });
         this.deliveries.sent(m.guildId, `auto:${m.id}`, reply.id);
       } catch { this.deliveries.unknown(m.guildId, `auto:${m.id}`); console.warn(JSON.stringify({ event: 'link_delivery_unknown', guildId: m.guildId, channelId: m.channelId })); }
-      return; // At most one bot reply per source message.
+      return;
     }
   }
 }
