@@ -56,6 +56,7 @@ export class AmazonDiscordController {
     const payload = { content, components, embeds, allowedMentions: NO_MENTIONS };
     if (i.deferred || i.replied) await i.editReply(payload);
     else if (i.isMessageComponent()) await i.update(payload);
+    else if (i.isModalSubmit() && i.isFromMessage()) await i.update(payload);
     else await i.reply({ ...payload, ephemeral: true });
   }
   private async handle(i: Interaction) {
@@ -78,6 +79,7 @@ export class AmazonDiscordController {
       // Never dump an exception: Discord errors can contain request bodies/tokens.
       if (!(error instanceof UserInputError)) console.warn(JSON.stringify({ event: 'amazon_action_failed', guildId: i.guildId }));
       if (i.deferred || i.replied) await i.editReply({ content, components: [], embeds: [], allowedMentions: NO_MENTIONS });
+      else if (i.isModalSubmit() && i.isFromMessage()) await i.update({ content, components: [], embeds: [], allowedMentions: NO_MENTIONS });
       else await i.reply({ content, ephemeral: true, allowedMentions: NO_MENTIONS });
     }
   }
@@ -134,8 +136,9 @@ export class AmazonDiscordController {
       content = '**Step 3 / 6 — OneLink (optional information)**\nOneLink is configured in Amazon PartnerNet, not in this bot. It is not required for product or program links. You can use individual marketplace tracking IDs without it.';
       rows.push(buttons(button(key('onelink_yes'), 'I use OneLink (optional)'), button(key('onelink_no'), 'Skip OneLink'), link(ONE_LINK, 'Open OneLink guide')));
     } else if (draft.step === 'channels') {
-      content = '**Step 4 / 6 — Product channels**\nChoose 1–5 text channels for manual posts and optional automatic link replies. Saving replaces the previous enabled channel selection.';
+      content = '**Step 4 / 6 — Product channels**\nChoose 1–5 text channels for manual posts and optional automatic link replies. Discord shows channels in one flat picker here, without category headers such as MARKETPLACE. If you started setup inside the channel you want, use **Use this channel**.';
       rows.push(new ActionRowBuilder<ChannelSelectMenuBuilder>().addComponents(new ChannelSelectMenuBuilder().setCustomId(key('channels')).setPlaceholder('Choose product channels').setChannelTypes(ChannelType.GuildText).setMinValues(1).setMaxValues(5)));
+      rows.push(buttons(button(key('current_channel'), 'Use this channel', ButtonStyle.Primary)));
     } else if (draft.step === 'behavior') {
       content = '**Step 5 / 6 — Automatic link replies**\nButtons or replies operate only in your selected channels. Off still allows private link generation and reviewed manual posts. Already-tagged links are skipped automatically. Original member messages stay untouched.';
       rows.push(new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(new StringSelectMenuBuilder().setCustomId(key('behavior')).setPlaceholder('Choose behavior').addOptions({ label: 'Off — manual posts only', value: 'OFF' }, { label: 'Compact Amazon button', value: 'BUTTON' }, { label: 'Reply with affiliate / product link', value: 'REPLY' })));
@@ -181,6 +184,12 @@ export class AmazonDiscordController {
       this.setup.requireStep(draft, 'onelink'); c.oneLinkDeclared = action === 'onelink_yes'; draft.step = 'channels';
     } else if (action === 'channels' && i.isChannelSelectMenu()) {
       this.setup.requireStep(draft, 'channels'); c.channels = i.values; draft.step = 'behavior';
+    } else if (action === 'current_channel' && i.isButton()) {
+      this.setup.requireStep(draft, 'channels');
+      if (!i.channelId) throw new UserInputError('Run /amazon setup inside the text channel you want to use, or choose a channel from the picker.');
+      await this.targetChannel(i.guildId!, i.channelId, i.user.id);
+      c.channels = [i.channelId];
+      draft.step = 'behavior';
     } else if (action === 'behavior' && i.isStringSelectMenu()) {
       this.setup.requireStep(draft, 'behavior');
       if (!['OFF', 'REPLY', 'BUTTON'].includes(i.values[0])) throw new UserInputError('Choose a valid link behavior.');
