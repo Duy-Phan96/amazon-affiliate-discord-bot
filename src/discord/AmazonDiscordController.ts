@@ -18,7 +18,7 @@ import { AmazonProgramLinkService } from '../services/AmazonProgramLinkService.j
 import { ProgramTemplateRenderer } from '../services/ProgramTemplateRenderer.js';
 import { AmazonProgramTemplateRepository, type AmazonProgramTemplateRow } from '../repositories/AmazonProgramTemplateRepository.js';
 import { paginateChannelChoices, type ChannelChoicePage } from '../services/ChannelPagination.js';
-import { buildQuickProductPresentation, inferProductTitleFromAmazonUrl } from '../services/ProductUrlPresentation.js';
+import { buildQuickProductPresentation, buildSmartAutoCopy, inferProductTitleFromAmazonUrl } from '../services/ProductUrlPresentation.js';
 import { AmazonPostQueueRepository, type QueueItemStyle } from '../repositories/AmazonPostQueueRepository.js';
 import { AmazonQueueScheduler } from '../services/AmazonQueueScheduler.js';
 
@@ -129,7 +129,9 @@ export class AmazonDiscordController {
             allowedMentions: NO_MENTIONS,
           }
         : {
-            content: `${result.affiliate ? DISCLOSURE : 'Amazon product link · No affiliate tag added.'}${useNativePreview ? `\n${result.url}` : presentation.title !== `Amazon product ${result.asin}` ? `\n**${escapeMarkdown(presentation.title)}**` : ''}`,
+            content: useNativePreview
+              ? buildSmartAutoCopy(escapeMarkdown(presentation.title), result.url, result.affiliate)
+              : `${result.affiliate ? DISCLOSURE : 'Amazon product link · No affiliate tag added.'}${presentation.title !== `Amazon product ${result.asin}` ? `\n**${escapeMarkdown(presentation.title)}**` : ''}`,
             components: [buttons(link(result.url, 'Open on Amazon'))],
             allowedMentions: NO_MENTIONS,
           };
@@ -448,7 +450,10 @@ export class AmazonDiscordController {
       const presentation = buildQuickProductPresentation(item.url, item.title, item.body);
       const useEmbed = item.style === 'EMBED';
       const useNativePreview = item.style === 'AUTO';
-      const content = `**Queue Preview — not published**\nItem: **#${item.id}** · Style: **${item.style}**\n\n${result.affiliate ? DISCLOSURE : 'Amazon product link · No affiliate tag added.'}${useNativePreview ? `\n${result.url}` : !useEmbed && presentation.title !== `Amazon product ${result.asin}` ? `\n**${escapeMarkdown(presentation.title)}**` : ''}`;
+      const previewBody = useNativePreview
+        ? buildSmartAutoCopy(escapeMarkdown(presentation.title), result.url, result.affiliate)
+        : `${result.affiliate ? DISCLOSURE : 'Amazon product link · No affiliate tag added.'}${!useEmbed && presentation.title !== `Amazon product ${result.asin}` ? `\n**${escapeMarkdown(presentation.title)}**` : ''}`;
+      const content = `**Queue Preview — not published**\nItem: **#${item.id}** · Style: **${item.style}**\n\n${previewBody}`;
       const embeds = useEmbed
         ? [new EmbedBuilder()
             .setTitle(escapeMarkdown(presentation.title))

@@ -5,7 +5,7 @@ import { AmazonPostQueueRepository, type AmazonQueueItemRow } from '../repositor
 import { ConfigRepository } from '../repositories/ConfigRepository.js';
 import { DeliveryRepository } from '../repositories/DeliveryRepository.js';
 import { ProductLinkService } from './ProductLinkService.js';
-import { buildQuickProductPresentation } from './ProductUrlPresentation.js';
+import { buildQuickProductPresentation, buildSmartAutoCopy } from './ProductUrlPresentation.js';
 
 const DISCLOSURE = '#ad · Affiliate link';
 const NO_MENTIONS = { parse: [] as never[], repliedUser: false };
@@ -90,7 +90,8 @@ export class AmazonQueueScheduler {
     }
 
     const presentation = buildQuickProductPresentation(item.url, item.title, item.body);
-    const useEmbed = item.style === 'EMBED' || (item.style === 'AUTO' && (presentation.title !== `Amazon product ${result.asin}` || !!item.body));
+    const useEmbed = item.style === 'EMBED';
+    const useNativePreview = item.style === 'AUTO';
     const payload: any = useEmbed
       ? {
           content: result.affiliate ? DISCLOSURE : 'Amazon product link · No affiliate tag added.',
@@ -107,7 +108,9 @@ export class AmazonQueueScheduler {
           allowedMentions: NO_MENTIONS,
         }
       : {
-          content: `${result.affiliate ? DISCLOSURE : 'Amazon product link · No affiliate tag added.'}\n${presentation.title !== `Amazon product ${result.asin}` ? `**${presentation.title}**\n` : ''}`,
+          content: useNativePreview
+            ? buildSmartAutoCopy(presentation.title, result.url, result.affiliate)
+            : `${result.affiliate ? DISCLOSURE : 'Amazon product link · No affiliate tag added.'}\n${presentation.title !== `Amazon product ${result.asin}` ? `**${presentation.title}**\n` : ''}`,
           components: [{ type: 1, components: [{ type: 2, style: 5, label: 'Open on Amazon', url: result.url }] }],
           allowedMentions: NO_MENTIONS,
         };

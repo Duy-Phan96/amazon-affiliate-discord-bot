@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildQuickProductPresentation, inferProductTitleFromAmazonUrl } from '../src/services/ProductUrlPresentation.js';
+import { buildQuickProductPresentation, buildSmartAutoCopy, inferProductIcon, inferProductTitleFromAmazonUrl } from '../src/services/ProductUrlPresentation.js';
 
 describe('product URL presentation', () => {
   it('derives a readable title from a normal Amazon slug', () => {
@@ -17,5 +17,24 @@ describe('product URL presentation', () => {
     );
     expect(result.title).toBe('Mein Titel');
     expect(result.description).toBe('Meine Beschreibung');
+  });
+});
+
+
+describe('smart auto product copy', () => {
+  it('chooses a product icon from inferred product type', () => {
+    expect(inferProductIcon('Logitech G305 Gaming Maus')).toBe('🖱️');
+    expect(inferProductIcon('Wireless Gaming Headset')).toBe('🎧');
+    expect(inferProductIcon('Unknown product')).toBe('🛒');
+  });
+
+  it('builds a neutral English auto layout without inventing deal facts', () => {
+    const text = buildSmartAutoCopy('Logitech G305 Gaming Mouse', 'https://www.amazon.de/dp/B0ABCDEF12?tag=test-21', true);
+    expect(text).toContain('🖱️ **Logitech G305 Gaming Mouse**');
+    expect(text).toContain('Check current price & availability on Amazon.');
+    expect(text).toContain('#ad · Affiliate link');
+    expect(text).toContain('?tag=test-21');
+    expect(text.toLowerCase()).not.toContain('discount');
+    expect(text.toLowerCase()).not.toContain('deal');
   });
 });

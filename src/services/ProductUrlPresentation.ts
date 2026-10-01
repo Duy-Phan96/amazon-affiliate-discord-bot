@@ -30,3 +30,26 @@ export function buildQuickProductPresentation(input: string, explicitTitle?: str
   const description = explicitText?.trim() || 'Open Amazon for current product details.';
   return { title: title.slice(0, 120), description: description.slice(0, 500), parsed };
 }
+
+
+export function inferProductIcon(input: string): string {
+  const text = input.toLowerCase();
+  if (/mouse|maus/.test(text)) return '🖱️';
+  if (/headset|headphone|kopfhörer|earbud/.test(text)) return '🎧';
+  if (/keyboard|tastatur/.test(text)) return '⌨️';
+  if (/monitor|display/.test(text)) return '🖥️';
+  if (/controller|gamepad/.test(text)) return '🎮';
+  if (/microphone|mic|mikrofon/.test(text)) return '🎙️';
+  if (/ssd|hard drive|festplatte|storage/.test(text)) return '💾';
+  if (/laptop|notebook/.test(text)) return '💻';
+  if (/chair|stuhl/.test(text)) return '🪑';
+  if (/router|wifi|wi-fi/.test(text)) return '📶';
+  return '🛒';
+}
+
+export function buildSmartAutoCopy(title: string, affiliateUrl: string, affiliate = true): string {
+  const icon = inferProductIcon(title);
+  const heading = title.startsWith('Amazon product ') ? 'Amazon Product' : title;
+  const disclosure = affiliate ? '#ad · Affiliate link' : 'Amazon product link';
+  return `${icon} **${heading}**\nCheck current price & availability on Amazon.\n\n${disclosure}\n${affiliateUrl}`;
+}
