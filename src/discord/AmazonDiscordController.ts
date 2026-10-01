@@ -362,11 +362,15 @@ export class AmazonDiscordController {
   }
 
   private async programChannelView(i: UI, id: string) {
-    return this.show(i, '**Choose a configured Amazon channel**\nThe program post will be previewed before publication.', [
+    return this.show(i, '**Choose a configured Amazon channel**\nThe program post will be previewed before publication. Discord shows a flat channel picker here; if you started this flow inside the channel you want, use **Use this channel**.', [
       new ActionRowBuilder<ChannelSelectMenuBuilder>().addComponents(
         new ChannelSelectMenuBuilder().setCustomId(`amazon:programpost:${id}:channel`).setChannelTypes(ChannelType.GuildText).setPlaceholder('Select configured channel')
       ),
-      buttons(button(`amazon:programpost:${id}:edit`, 'Edit Post'), button(`amazon:programpost:${id}:cancel`, 'Cancel', ButtonStyle.Danger)),
+      buttons(
+        button(`amazon:programpost:${id}:current_channel`, 'Use this channel', ButtonStyle.Primary),
+        button(`amazon:programpost:${id}:edit`, 'Edit Post'),
+        button(`amazon:programpost:${id}:cancel`, 'Cancel', ButtonStyle.Danger)
+      ),
     ]);
   }
 
@@ -413,6 +417,15 @@ export class AmazonDiscordController {
       await i.deferUpdate();
       await this.targetChannel(i.guildId!, i.values[0], i.user.id);
       draft.data.channel = i.values[0];
+      draft.step = 'review';
+      return this.programPreview(i, id);
+    }
+    if (action === 'current_channel' && i.isButton()) {
+      if (!i.channelId) throw new UserInputError('Start the program flow inside the text channel you want to use, or choose a channel from the picker.');
+      if (!this.repo.isLinkChannel(i.guildId!, i.channelId)) throw new UserInputError('This channel is not configured for Amazon. Run /amazon setup here first.');
+      await i.deferUpdate();
+      await this.targetChannel(i.guildId!, i.channelId, i.user.id);
+      draft.data.channel = i.channelId;
       draft.step = 'review';
       return this.programPreview(i, id);
     }
