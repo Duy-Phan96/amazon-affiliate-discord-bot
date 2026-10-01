@@ -91,7 +91,7 @@ export class AmazonDiscordController {
   }
   private async command(i: ChatInputCommandInteraction) {
     const guildId = i.guildId!;
-    const group = i.options.getSubcommandGroup(false);
+    const group = (i.options as any).getSubcommandGroup?.(false) ?? null;
     const sub = i.options.getSubcommand();
     if (group === 'queue') return this.queueCommand(i, sub);
     if (sub === 'link') {
