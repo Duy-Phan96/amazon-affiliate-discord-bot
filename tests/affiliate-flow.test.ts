@@ -39,7 +39,7 @@ describe('private affiliate link command', () => {
     const { controller, deliveries } = fixture(); const i = interaction(); await controller.handle(i);
     const payload = i.reply.mock.calls[0][0] as any;
     expect(payload.ephemeral).toBe(true); expect(payload.content).toContain('?tag=test-21');
-    expect(payload.content).toContain('Anzeige'); expect(payload.content).toContain('not verified');
+    expect(payload.content).toContain('#ad · Affiliate link'); expect(payload.content).toContain('not verified');
     expect(deliveries.reserve).not.toHaveBeenCalled(); expect(payload.allowedMentions.parse).toEqual([]);
   });
   it('Basic remains available without accessing any tag', async () => {
@@ -130,7 +130,7 @@ describe('quick public affiliate post command', () => {
     await controller.handle(i);
     expect(sent).toHaveBeenCalledTimes(1);
     const payload = sent.mock.calls[0][0] as any;
-    expect(payload.content).toContain('Anzeige');
+    expect(payload.content).toContain('#ad · Affiliate link');
     expect(payload.components[0].toJSON().components[0].url).toBe(PRODUCT + '?tag=test-21');
     expect(deliveries.sent).toHaveBeenCalled();
   });
