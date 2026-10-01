@@ -17,7 +17,7 @@ export function inferProductTitleFromAmazonUrl(input: string): string | undefine
   try { decoded = decodeURIComponent(raw); } catch { decoded = raw; }
   const cleaned = decoded
     .replace(/[-_]+/g, ' ')
-    .replace(/s+/g, ' ')
+    .replace(/\s+/g, ' ')
     .trim();
   if (cleaned.length < 4 || cleaned.length > 120 || !/[A-Za-zÀ-ÿ0-9]/.test(cleaned)) return undefined;
   return cleaned;

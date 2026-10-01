@@ -99,3 +99,24 @@ A safe Amazon.de diagnostic is available as:
 It uses OAuth 2.0 Client Credentials, the saved Amazon.de tracking ID, and one official SearchItems request. Secrets stay in the private environment file and are never printed. See [docs/CREATORS_API_TEST.md](docs/CREATORS_API_TEST.md).
 
 A successful credential/token exchange is not treated as proof of product-data eligibility; `AssociateNotEligible` is reported separately.
+
+
+## Semi-automatic posting queue
+
+Admins can prepare multiple Amazon product links and let the bot publish them sequentially without requiring Creators API access.
+
+Initial queue commands:
+
+- `/amazon queue add` — add a product URL with optional title/text/style.
+- `/amazon queue start` — choose a configured Amazon channel and either a 12-hour or 24-hour interval.
+- `/amazon queue status` — show running/paused state, next run and the next pending items.
+- `/amazon queue next` — publish the next item immediately.
+- `/amazon queue pause` / `resume` — stop or continue automatic delivery.
+- `/amazon queue remove` — remove a pending item.
+- `/amazon queue skip` — keep an item in history but skip publication.
+
+Queue state is persisted in SQLite and survives bot/VPS restarts. The current marketplace tracking ID is resolved when an item is actually posted, so a later tracking-ID change applies to future queue posts.
+
+For the first version, intervals are deliberately limited to 12 or 24 hours. A queue can contain up to 50 pending items.
+
+If Discord delivery is uncertain, the affected item is marked unknown and the queue is paused rather than blindly retrying and risking a duplicate post.

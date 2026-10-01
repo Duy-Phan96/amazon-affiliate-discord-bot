@@ -19,6 +19,8 @@ import { ProgramTemplateRenderer } from '../services/ProgramTemplateRenderer.js'
 import { AmazonProgramTemplateRepository, type AmazonProgramTemplateRow } from '../repositories/AmazonProgramTemplateRepository.js';
 import { paginateChannelChoices, type ChannelChoicePage } from '../services/ChannelPagination.js';
 import { buildQuickProductPresentation, inferProductTitleFromAmazonUrl } from '../services/ProductUrlPresentation.js';
+import { AmazonPostQueueRepository, type QueueItemStyle } from '../repositories/AmazonPostQueueRepository.js';
+import { AmazonQueueScheduler } from '../services/AmazonQueueScheduler.js';
 
 type UI = ChatInputCommandInteraction | MessageComponentInteraction | ModalSubmitInteraction;
 type SetupData = { config: SetupConfig; revision: number; channelPage: number };
@@ -46,6 +48,8 @@ export class AmazonDiscordController {
     private deliveries: DeliveryRepository,
     private allowedGuildId?: string,
     private templates?: AmazonProgramTemplateRepository,
+    private queues?: AmazonPostQueueRepository,
+    private queueScheduler?: AmazonQueueScheduler,
   ) {
     this.links = new ProductLinkService(repo);
     this.programLinks = new AmazonProgramLinkService(repo);
@@ -87,7 +91,9 @@ export class AmazonDiscordController {
   }
   private async command(i: ChatInputCommandInteraction) {
     const guildId = i.guildId!;
+    const group = i.options.getSubcommandGroup(false);
     const sub = i.options.getSubcommand();
+    if (group === 'queue') return this.queueCommand(i, sub);
     if (sub === 'link') {
       const result = this.links.generate(guildId, i.options.getString('url', true).trim());
       const oneLink = this.repo.listMarketplaces(guildId).some(m => m.marketplace === result.marketplace && m.enabled && m.onelink_enabled);
@@ -375,6 +381,87 @@ export class AmazonDiscordController {
     throw new UserInputError('This control is no longer current. Run /amazon product again.');
   }
 
+  private requireQueue(): AmazonPostQueueRepository {
+    if (!this.queues) throw new UserInputError('Amazon queue is not available in this runtime.');
+    return this.queues;
+  }
+
+  private requireQueueScheduler(): AmazonQueueScheduler {
+    if (!this.queueScheduler) throw new UserInputError('Amazon queue scheduler is not available in this runtime.');
+    return this.queueScheduler;
+  }
+
+  private async queueCommand(i: ChatInputCommandInteraction, sub: string) {
+    const guildId = i.guildId!;
+    const queues = this.requireQueue();
+
+    if (sub === 'add') {
+      const url = i.options.getString('url', true).trim();
+      this.links.generate(guildId, url);
+      const item = queues.add(guildId, i.user.id, {
+        url,
+        title: i.options.getString('title'),
+        body: i.options.getString('text'),
+        style: (i.options.getString('style') ?? 'AUTO') as QueueItemStyle,
+      });
+      const pending = queues.pending(guildId).length;
+      return this.show(i, `Added queue item **#${item.id}**. Pending posts: **${pending}**.\nUse "/amazon queue start" to set 12h/24h posting, or "/amazon queue next" to post the first item now.`);
+    }
+
+    if (sub === 'start') {
+      const channel = i.options.getChannel('channel', true);
+      const interval = i.options.getInteger('interval', true);
+      if (![12, 24].includes(interval)) throw new UserInputError('Choose a 12h or 24h interval.');
+      if (!this.repo.isLinkChannel(guildId, channel.id)) throw new UserInputError('That channel is not configured for Amazon. Add it in /amazon setup first.');
+      await this.targetChannel(guildId, channel.id, i.user.id);
+      const queue = queues.configure(guildId, i.user.id, channel.id, interval as 12 | 24, Date.now() + interval * 60 * 60 * 1000);
+      const pending = queues.pending(guildId).length;
+      return this.show(i, `**Amazon queue started**\nChannel: <#${channel.id}>\nInterval: every **${queue.interval_hours} hours**\nPending: **${pending}**\nNext automatic post: <t:${Math.floor((queue.next_run_at ?? Date.now()) / 1000)}:R>\n\nUse "/amazon queue next" if you want the first queued item posted immediately.`);
+    }
+
+    if (sub === 'status') {
+      const queue = queues.get(guildId);
+      const items = queues.list(guildId);
+      if (!queue) return this.show(i, '**Amazon Queue**\nNo queue yet. Add products with /amazon queue add.');
+      const pending = items.filter(item => item.state === 'PENDING');
+      const lines = pending.slice(0, 10).map(item => {
+        let label = `Amazon item #${item.id}`;
+        const inferred = inferProductTitleFromAmazonUrl(item.url);
+        if (item.title || inferred) label = item.title || inferred!;
+        return `#${item.id} · ${escapeMarkdown(label).slice(0, 80)}`;
+      });
+      const next = queue.next_run_at ? `<t:${Math.floor(queue.next_run_at / 1000)}:R>` : 'Not scheduled';
+      return this.show(i, `**Amazon Queue**\nStatus: **${queue.enabled ? 'Running' : 'Paused'}**\nChannel: ${queue.channel_id ? `<#${queue.channel_id}>` : 'Not configured'}\nInterval: **${queue.interval_hours}h**\nNext automatic post: ${next}\nPending: **${pending.length}**\n\n${lines.length ? lines.join('\n') : '_Queue is empty._'}${pending.length > 10 ? `\n… and ${pending.length - 10} more` : ''}`);
+    }
+
+    if (sub === 'pause') {
+      queues.pause(guildId);
+      return this.show(i, `Amazon queue paused. **${queues.pending(guildId).length}** posts remain pending.`);
+    }
+
+    if (sub === 'resume') {
+      const current = queues.get(guildId);
+      if (!current) throw new UserInputError('No Amazon queue exists yet.');
+      const queue = queues.resume(guildId, Date.now() + current.interval_hours * 60 * 60 * 1000);
+      return this.show(i, `Amazon queue resumed. Next automatic post: <t:${Math.floor((queue.next_run_at ?? Date.now()) / 1000)}:R>.`);
+    }
+
+    if (sub === 'remove' || sub === 'skip') {
+      const itemId = i.options.getInteger('id', true);
+      if (sub === 'remove') queues.remove(guildId, itemId);
+      else queues.skip(guildId, itemId);
+      return this.show(i, `Queue item #${itemId} ${sub === 'remove' ? 'removed' : 'skipped'}. Pending: **${queues.pending(guildId).length}**.`);
+    }
+
+    if (sub === 'next') {
+      const result = await this.requireQueueScheduler().runNow(guildId);
+      if (result === 'SENT') return this.show(i, 'Next Amazon queue item published.');
+      if (result === 'EMPTY') return this.show(i, 'The Amazon queue has no pending item.');
+      return this.show(i, 'The next queue delivery could not be confirmed. The queue was paused to prevent duplicate posting. Check the target channel and /amazon queue status.');
+    }
+
+    throw new UserInputError('Unknown Amazon queue action.');
+  }
   private requireTemplates(): AmazonProgramTemplateRepository {
     if (!this.templates) throw new UserInputError('Program templates are not available in this runtime.');
     return this.templates;

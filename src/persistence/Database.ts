@@ -24,6 +24,31 @@ export class AppDatabase {
     );
     CREATE INDEX IF NOT EXISTS amazon_program_templates_guild_enabled
       ON amazon_program_templates(guild_id, enabled, updated_at);
+    CREATE TABLE IF NOT EXISTS amazon_post_queues (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      guild_id TEXT NOT NULL UNIQUE,
+      channel_id TEXT,
+      interval_hours INTEGER NOT NULL DEFAULT 24,
+      enabled INTEGER NOT NULL DEFAULT 0,
+      next_run_at INTEGER,
+      created_by TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS amazon_post_queue_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      queue_id INTEGER NOT NULL,
+      position INTEGER NOT NULL,
+      url TEXT NOT NULL,
+      title TEXT,
+      body TEXT,
+      style TEXT NOT NULL DEFAULT 'AUTO',
+      state TEXT NOT NULL DEFAULT 'PENDING',
+      created_at TEXT NOT NULL,
+      sent_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS amazon_post_queue_items_pending
+      ON amazon_post_queue_items(queue_id,state,position,id);
     CREATE TABLE IF NOT EXISTS link_deliveries (
       guild_id TEXT NOT NULL, event_id TEXT NOT NULL, channel_id TEXT NOT NULL,
       product_key TEXT NOT NULL, state TEXT NOT NULL, message_id TEXT, created_at INTEGER NOT NULL,
