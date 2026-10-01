@@ -120,3 +120,18 @@ Queue state is persisted in SQLite and survives bot/VPS restarts. The current ma
 For the first version, intervals are deliberately limited to 12 or 24 hours. A queue can contain up to 50 pending items.
 
 If Discord delivery is uncertain, the affected item is marked unknown and the queue is paused rather than blindly retrying and risking a duplicate post.
+
+
+## Disclosure convention
+
+Current public bot copy is English-only.
+
+Per affiliate post:
+
+`#ad · Affiliate link`
+
+Keep the required Amazon Associate statement clearly associated with the server/channel/account:
+
+`As an Amazon Associate I earn from qualifying purchases.`
+
+Do not tell users that using the link “supports the server” or otherwise encourage clicks as a way to support the operator. Amazon's current participation requirements prohibit incentives or support-style requests tied to affiliate-link usage. See `docs/API_FREE_SETUP.md` for the source links and rationale.

@@ -2,8 +2,7 @@ import { UserInputError } from './SetupValidation.js';
 
 const ALLOWED = new Set(['affiliate_link', 'program_name']);
 const PLACEHOLDER = /\{([^{}\s]+)\}/g;
-export const PROGRAM_DISCLOSURE =
-  'Anzeige / Ad · Affiliate link\nAs an Amazon Associate I earn from qualifying purchases.\nAls Amazon-Partner verdiene ich an qualifizierten Verkäufen.';
+export const PROGRAM_DISCLOSURE = '#ad · Affiliate link';
 
 function neutralizeMentions(input: string): string {
   return input

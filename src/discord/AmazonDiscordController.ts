@@ -29,7 +29,7 @@ type ProgramPostData = { programKey: AmazonProgramKey; body: string; templateNam
 const LABELS = { DE: 'Amazon.de', US: 'Amazon.com', UK: 'Amazon.co.uk' };
 const ONE_LINK = 'https://affiliate-program.amazon.com/help/node/topic/GKHRXG4YEJBTCAFC';
 const DISCLOSURE_GUIDE = 'https://partnernet.amazon.de/help/node/topic/GHQNZAU6669EZS98';
-const DISCLOSURE = 'Anzeige / Ad · Affiliate link\nAs an Amazon Associate I earn from qualifying purchases.\nAls Amazon-Partner verdiene ich an qualifizierten Verkäufen.';
+const DISCLOSURE = '#ad · Affiliate link';
 const NO_MENTIONS = { parse: [] as never[], repliedUser: false };
 const buttons = (...items: ButtonBuilder[]) => new ActionRowBuilder<ButtonBuilder>().addComponents(...items);
 const button = (id: string, text: string, style = ButtonStyle.Secondary) => new ButtonBuilder().setCustomId(id).setLabel(text).setStyle(style);

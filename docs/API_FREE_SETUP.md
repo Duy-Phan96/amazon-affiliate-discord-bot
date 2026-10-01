@@ -108,3 +108,37 @@ Provisionen/Bounties und Aktionsbedingungen werden absichtlich nicht als feste W
 OneLink ist für diese Programmlinks nicht erforderlich und bleibt eine optionale Amazon-seitige Information.
 
 Automatisches zeitgesteuertes Posten (z. B. „Amazon Visa alle 4 Tage“) ist der **darauffolgende** Feature-Slice und wird erst nach dem Live-Test der manuellen Programmposts umgesetzt.
+
+
+## 10. English-only disclosure standard for the current server
+
+The current GamerHQ test server is English-only. The bot should therefore keep public affiliate-post copy in English for now. Multi-language support is a later feature.
+
+For each individual affiliate post, keep the disclosure short and close to the link/button:
+
+```
+#ad · Affiliate link
+```
+
+Amazon's PartnerNet guidance says the link disclosure should be clear and conspicuous near the affiliate link; Amazon gives examples such as `#ad` or a paid-link disclosure.
+
+Separately, place the required Amazon Associate statement clearly in the server/channel/account context, for example in the Amazon channel topic, a pinned information message, or another clearly associated disclosure location:
+
+```
+As an Amazon Associate I earn from qualifying purchases.
+```
+
+Do **not** use wording such as:
+
+```
+Using this link supports the server.
+```
+
+or similar requests to support the server/company through the affiliate link. Amazon's participation requirements prohibit incentives or requests framed around supporting you, your company, charities, or other organizations through use of the affiliate links.
+
+Official sources:
+- Amazon disclosure guidance: https://partnernet.amazon.de/help/node/topic/GHQNZAU6669EZS98
+- Amazon participation requirements: https://partnernet.amazon.de/help/operating/participation
+- Amazon Associates agreement: https://partnernet.amazon.de/help/operating/agreement/
+
+This documentation does not claim legal approval for Discord as a placement; the operator must still ensure the actual registered site/account usage is accepted by Amazon.

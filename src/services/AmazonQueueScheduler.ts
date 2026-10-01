@@ -7,7 +7,7 @@ import { DeliveryRepository } from '../repositories/DeliveryRepository.js';
 import { ProductLinkService } from './ProductLinkService.js';
 import { buildQuickProductPresentation } from './ProductUrlPresentation.js';
 
-const DISCLOSURE = 'Anzeige / Ad · Affiliate link\nAs an Amazon Associate I earn from qualifying purchases.\nAls Amazon-Partner verdiene ich an qualifizierten Verkäufen.';
+const DISCLOSURE = '#ad · Affiliate link';
 const NO_MENTIONS = { parse: [] as never[], repliedUser: false };
 
 export class AmazonQueueScheduler {
