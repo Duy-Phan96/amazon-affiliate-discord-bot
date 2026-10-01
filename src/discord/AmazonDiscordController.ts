@@ -18,6 +18,7 @@ import { AmazonProgramLinkService } from '../services/AmazonProgramLinkService.j
 import { ProgramTemplateRenderer } from '../services/ProgramTemplateRenderer.js';
 import { AmazonProgramTemplateRepository, type AmazonProgramTemplateRow } from '../repositories/AmazonProgramTemplateRepository.js';
 import { paginateChannelChoices, type ChannelChoicePage } from '../services/ChannelPagination.js';
+import { buildQuickProductPresentation, inferProductTitleFromAmazonUrl } from '../services/ProductUrlPresentation.js';
 
 type UI = ChatInputCommandInteraction | MessageComponentInteraction | ModalSubmitInteraction;
 type SetupData = { config: SetupConfig; revision: number; channelPage: number };
@@ -92,6 +93,47 @@ export class AmazonDiscordController {
       const oneLink = this.repo.listMarketplaces(guildId).some(m => m.marketplace === result.marketplace && m.enabled && m.onelink_enabled);
       const content = `**${result.affiliate ? 'Your affiliate link' : 'Your product link'} — only visible to you**\n<${result.url}>\n\n${result.affiliate ? DISCLOSURE : 'Basic mode: no affiliate tag added.'}\n\nSource: ${LABELS[result.marketplace]} · ASIN ${result.asin}\n${oneLink && result.affiliate ? 'OneLink: declared by you; redirection and commission are not verified.' : 'OneLink is not required to generate this link.'}\n\nCopy the link together with its disclosure, or use /amazon product for a reviewed channel post. No public message was sent.`;
       return this.show(i, content, [buttons(link(result.url, 'Open on Amazon'), link(ONE_LINK, 'OneLink guide'))]);
+    }
+    if (sub === 'post') {
+      if (!i.channelId || !this.repo.isLinkChannel(guildId, i.channelId)) throw new UserInputError('This channel is not configured for Amazon. Run /amazon setup here first.');
+      const input = i.options.getString('url', true).trim();
+      const result = this.links.generate(guildId, input);
+      const presentation = buildQuickProductPresentation(
+        input,
+        i.options.getString('title'),
+        i.options.getString('text'),
+      );
+      const style = i.options.getString('style') ?? 'AUTO';
+      const channel = await this.targetChannel(guildId, i.channelId, i.user.id);
+      const eventId = `quickpost:${i.id}`;
+      if (!this.deliveries.reserve(guildId, eventId, channel.id, result.canonicalUrl)) {
+        throw new UserInputError('This post already has a delivery attempt. Check the channel before retrying.');
+      }
+      const useEmbed = style === 'EMBED' || (style === 'AUTO' && (presentation.title !== `Amazon product ${result.asin}` || !!i.options.getString('text')));
+      const payload = useEmbed
+        ? {
+            content: result.affiliate ? DISCLOSURE : 'Amazon product link · No affiliate tag added.',
+            embeds: [new EmbedBuilder()
+              .setTitle(escapeMarkdown(presentation.title))
+              .setURL(result.url)
+              .setDescription(escapeMarkdown(presentation.description))
+              .setFooter({ text: `${LABELS[result.marketplace]} · ASIN ${result.asin} · No live product data fetched` })],
+            components: [buttons(link(result.url, 'Open on Amazon'))],
+            allowedMentions: NO_MENTIONS,
+          }
+        : {
+            content: `${result.affiliate ? DISCLOSURE : 'Amazon product link · No affiliate tag added.'}\n${presentation.title !== `Amazon product ${result.asin}` ? `**${escapeMarkdown(presentation.title)}**\n` : ''}`,
+            components: [buttons(link(result.url, 'Open on Amazon'))],
+            allowedMentions: NO_MENTIONS,
+          };
+      try {
+        const message = await channel.send(payload);
+        this.deliveries.sent(guildId, eventId, message.id);
+      } catch {
+        this.deliveries.unknown(guildId, eventId);
+        throw new UserInputError('Delivery could not be confirmed. Check this channel before retrying; the bot will not automatically resend.');
+      }
+      return this.show(i, `Affiliate post published in <#${channel.id}>.`);
     }
     if (sub === 'setup') {
       const current = this.repo.getGuild(guildId);
@@ -650,8 +692,9 @@ export class AmazonDiscordController {
       result = this.links.generate(m.guildId, input);
       if (!this.deliveries.reserve(m.guildId, `auto:${m.id}`, m.channelId, result.canonicalUrl, 60_000)) return;
       try {
-        const content = `${result.affiliate ? '**Amazon affiliate link**\n' + DISCLOSURE : 'Amazon product link · No affiliate tag added.'}${mode === 'REPLY' ? `\n<${result.url}>` : ''}`;
-        const reply = await m.reply({ content, components: mode === 'BUTTON' ? [buttons(link(result.url, 'View on Amazon'))] : [], allowedMentions: NO_MENTIONS });
+        const inferredTitle = inferProductTitleFromAmazonUrl(input);
+        const content = `${inferredTitle ? `**${escapeMarkdown(inferredTitle)}**\n` : ''}${result.affiliate ? '**Amazon affiliate link**\n' + DISCLOSURE : 'Amazon product link · No affiliate tag added.'}${mode === 'REPLY' ? `\n<${result.url}>` : ''}`;
+        const reply = await m.reply({ content, components: mode === 'BUTTON' ? [buttons(link(result.url, 'Open on Amazon'))] : [], allowedMentions: NO_MENTIONS });
         this.deliveries.sent(m.guildId, `auto:${m.id}`, reply.id);
       } catch { this.deliveries.unknown(m.guildId, `auto:${m.id}`); console.warn(JSON.stringify({ event: 'link_delivery_unknown', guildId: m.guildId, channelId: m.channelId })); }
       return;
