@@ -437,7 +437,7 @@ export class AmazonDiscordController {
       });
       const inferred = inferProductTitleFromAmazonUrl(updated.url);
       const label = updated.title || inferred || `Amazon item #${updated.id}`;
-      return this.show(i, `**Queue item #${updated.id} updated**\nTitle: **${escapeMarkdown(label).slice(0, 120)}**\nDescription: ${updated.body ? escapeMarkdown(updated.body).slice(0, 500) : '_Default Amazon details text_'}\nStyle: **${updated.style}**\n\nUse `/amazon queue preview id:${updated.id}` to review it before publication.`);
+      return this.show(i, `**Queue item #${updated.id} updated**\nTitle: **${escapeMarkdown(label).slice(0, 120)}**\nDescription: ${updated.body ? escapeMarkdown(updated.body).slice(0, 500) : '_Default Amazon details text_'}\nStyle: **${updated.style}**\n\nUse /amazon queue preview id:${updated.id} to review it before publication.`);
     }
 
     if (sub === 'preview') {
