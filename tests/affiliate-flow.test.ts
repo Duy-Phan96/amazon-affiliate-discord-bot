@@ -141,3 +141,25 @@ describe('quick public affiliate post command', () => {
     expect(inferProductTitleFromAmazonUrl(PRODUCT)).toBeUndefined();
   });
 });
+
+
+describe('quick post native Amazon preview', () => {
+  it('AUTO includes the affiliate URL in message content so Discord can unfurl it', async () => {
+    const { controller } = fixture();
+    const sent = vi.fn(async () => ({ id: '999999999999999997' }));
+    controller.targetChannel = vi.fn(async () => ({ id: CHANNEL, send: sent }));
+    const values: Record<string,string> = { url: PRODUCT, style: 'AUTO' };
+    const i:any = {
+      commandName:'amazon', guildId:GUILD, channelId:CHANNEL, id:'555555555555555557',
+      user:{id:'444444444444444444'}, memberPermissions:{has:()=>true},
+      isChatInputCommand:()=>true, isMessageComponent:()=>false, isModalSubmit:()=>false,
+      options:{ getSubcommandGroup:()=>null, getSubcommand:()=> 'post', getString:(name:string, required?:boolean)=> values[name] ?? (required ? PRODUCT : null) },
+      deferred:false,replied:false,reply:vi.fn(async()=>undefined)
+    };
+    await controller.handle(i);
+    const payload = sent.mock.calls[0][0] as any;
+    expect(payload.content).toContain(PRODUCT + '?tag=test-21');
+    expect(payload.content).toContain('#ad · Affiliate link');
+    expect(payload.embeds).toBeUndefined();
+  });
+});

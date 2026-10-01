@@ -115,7 +115,8 @@ export class AmazonDiscordController {
       if (!this.deliveries.reserve(guildId, eventId, channel.id, result.canonicalUrl)) {
         throw new UserInputError('This post already has a delivery attempt. Check the channel before retrying.');
       }
-      const useEmbed = style === 'EMBED' || (style === 'AUTO' && (presentation.title !== `Amazon product ${result.asin}` || !!i.options.getString('text')));
+      const useEmbed = style === 'EMBED';
+      const useNativePreview = style === 'AUTO';
       const payload = useEmbed
         ? {
             content: result.affiliate ? DISCLOSURE : 'Amazon product link · No affiliate tag added.',
@@ -128,7 +129,7 @@ export class AmazonDiscordController {
             allowedMentions: NO_MENTIONS,
           }
         : {
-            content: `${result.affiliate ? DISCLOSURE : 'Amazon product link · No affiliate tag added.'}\n${presentation.title !== `Amazon product ${result.asin}` ? `**${escapeMarkdown(presentation.title)}**\n` : ''}`,
+            content: `${result.affiliate ? DISCLOSURE : 'Amazon product link · No affiliate tag added.'}${useNativePreview ? `\n${result.url}` : presentation.title !== `Amazon product ${result.asin}` ? `\n**${escapeMarkdown(presentation.title)}**` : ''}`,
             components: [buttons(link(result.url, 'Open on Amazon'))],
             allowedMentions: NO_MENTIONS,
           };
