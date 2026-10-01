@@ -38,3 +38,26 @@ describe('Amazon post queue persistence', () => {
     } finally { db.close(); }
   });
 });
+
+
+  it('edits title, description and style of pending items', () => {
+    const db = new AppDatabase(':memory:');
+    try {
+      const repo = new AmazonPostQueueRepository(db);
+      const item = repo.add('g','admin',{url:'https://www.amazon.de/dp/B0ABCDEF12'});
+      const updated = repo.update('g', item.id, { title:'Gaming Mouse', body:'My queue description', style:'EMBED' });
+      expect(updated.title).toBe('Gaming Mouse');
+      expect(updated.body).toBe('My queue description');
+      expect(updated.style).toBe('EMBED');
+    } finally { db.close(); }
+  });
+
+  it('does not allow editing already handled items', () => {
+    const db = new AppDatabase(':memory:');
+    try {
+      const repo = new AmazonPostQueueRepository(db);
+      const item = repo.add('g','admin',{url:'https://www.amazon.de/dp/B0ABCDEF12'});
+      repo.skip('g', item.id);
+      expect(() => repo.update('g', item.id, { title:'Too late' })).toThrow(/Only pending/);
+    } finally { db.close(); }
+  });

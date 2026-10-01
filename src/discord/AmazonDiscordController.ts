@@ -420,6 +420,45 @@ export class AmazonDiscordController {
       return this.show(i, `**Amazon queue started**\nChannel: <#${channel.id}>\nInterval: every **${queue.interval_hours} hours**\nPending: **${pending}**\nNext automatic post: <t:${Math.floor((queue.next_run_at ?? Date.now()) / 1000)}:R>\n\nUse "/amazon queue next" if you want the first queued item posted immediately.`);
     }
 
+    if (sub === 'edit') {
+      const itemId = i.options.getInteger('id', true);
+      const current = queues.getItem(guildId, itemId);
+      if (current.state !== 'PENDING') throw new UserInputError('Only pending queue items can be edited.');
+      const title = i.options.getString('title');
+      const body = i.options.getString('text');
+      const style = i.options.getString('style') as QueueItemStyle | null;
+      if (title === null && body === null && style === null) {
+        throw new UserInputError('Provide at least one field to change: title, text or style.');
+      }
+      const updated = queues.update(guildId, itemId, {
+        title: title === null ? undefined : title,
+        body: body === null ? undefined : body,
+        style: style ?? undefined,
+      });
+      const inferred = inferProductTitleFromAmazonUrl(updated.url);
+      const label = updated.title || inferred || `Amazon item #${updated.id}`;
+      return this.show(i, `**Queue item #${updated.id} updated**\nTitle: **${escapeMarkdown(label).slice(0, 120)}**\nDescription: ${updated.body ? escapeMarkdown(updated.body).slice(0, 500) : '_Default Amazon details text_'}\nStyle: **${updated.style}**\n\nUse `/amazon queue preview id:${updated.id}` to review it before publication.`);
+    }
+
+    if (sub === 'preview') {
+      const itemId = i.options.getInteger('id', true);
+      const item = queues.getItem(guildId, itemId);
+      if (item.state !== 'PENDING') throw new UserInputError('Only pending queue items can be previewed.');
+      const result = this.links.generate(guildId, item.url);
+      const presentation = buildQuickProductPresentation(item.url, item.title, item.body);
+      const useEmbed = item.style === 'EMBED';
+      const useNativePreview = item.style === 'AUTO';
+      const content = `**Queue Preview — not published**\nItem: **#${item.id}** · Style: **${item.style}**\n\n${result.affiliate ? DISCLOSURE : 'Amazon product link · No affiliate tag added.'}${useNativePreview ? `\n${result.url}` : !useEmbed && presentation.title !== `Amazon product ${result.asin}` ? `\n**${escapeMarkdown(presentation.title)}**` : ''}`;
+      const embeds = useEmbed
+        ? [new EmbedBuilder()
+            .setTitle(escapeMarkdown(presentation.title))
+            .setURL(result.url)
+            .setDescription(escapeMarkdown(presentation.description))
+            .setFooter({ text: `${LABELS[result.marketplace]} · ASIN ${result.asin} · No live product data fetched` })]
+        : [];
+      return this.show(i, content, [buttons(link(result.url, 'Open on Amazon'))], embeds);
+    }
+
     if (sub === 'status') {
       const queue = queues.get(guildId);
       const items = queues.list(guildId);

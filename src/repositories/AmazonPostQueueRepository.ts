@@ -119,6 +119,22 @@ export class AmazonPostQueueRepository {
     this.database.db.prepare("UPDATE amazon_post_queue_items SET state='UNKNOWN' WHERE id=?").run(itemId);
   }
 
+  update(
+    guildId: string,
+    itemId: number,
+    input: { title?: string | null; body?: string | null; style?: QueueItemStyle },
+  ): AmazonQueueItemRow {
+    const item = this.getItem(guildId, itemId);
+    if (item.state !== 'PENDING') throw new UserInputError('Only pending queue items can be edited.');
+    const title = input.title === undefined ? item.title : input.title?.trim() || null;
+    const body = input.body === undefined ? item.body : input.body?.trim() || null;
+    const style = input.style ?? item.style;
+    this.database.db.prepare(
+      'UPDATE amazon_post_queue_items SET title=?,body=?,style=? WHERE id=?'
+    ).run(title, body, style, item.id);
+    return this.getItem(guildId, item.id);
+  }
+
   skip(guildId: string, itemId: number): void {
     const item = this.getItem(guildId, itemId);
     if (item.state !== 'PENDING') throw new UserInputError('Only pending queue items can be skipped.');

@@ -30,6 +30,17 @@ export const amazonCommand = new SlashCommandBuilder()
         { name: 'Every 12 hours', value: 12 },
         { name: 'Every 24 hours', value: 24 }
       )))
+    .addSubcommand(s => s.setName('edit').setDescription('Edit a pending queue item')
+      .addIntegerOption(o => o.setName('id').setDescription('Queue item ID from /amazon queue status').setRequired(true).setMinValue(1))
+      .addStringOption(o => o.setName('title').setDescription('New title; leave empty to keep current').setRequired(false).setMaxLength(120))
+      .addStringOption(o => o.setName('text').setDescription('New description; leave empty to keep current').setRequired(false).setMaxLength(500))
+      .addStringOption(o => o.setName('style').setDescription('New post style').setRequired(false).addChoices(
+        { name: 'Auto', value: 'AUTO' },
+        { name: 'Button only', value: 'BUTTON' },
+        { name: 'Embed', value: 'EMBED' }
+      )))
+    .addSubcommand(s => s.setName('preview').setDescription('Preview a pending queue item')
+      .addIntegerOption(o => o.setName('id').setDescription('Queue item ID from /amazon queue status').setRequired(true).setMinValue(1)))
     .addSubcommand(s => s.setName('status').setDescription('Show queue status and pending items'))
     .addSubcommand(s => s.setName('next').setDescription('Post the next queue item now'))
     .addSubcommand(s => s.setName('pause').setDescription('Pause automatic queue posting'))
