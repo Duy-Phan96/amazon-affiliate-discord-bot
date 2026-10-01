@@ -86,3 +86,16 @@ Program payouts, bounty amounts, campaign periods and eligibility are intentiona
 OneLink is optional and separate. It is not required to generate a program link and does not replace a missing marketplace tracking ID.
 
 Recurring schedules such as “post Amazon Visa every 4 days” are intentionally deferred to the next slice after program posts/templates are live-tested.
+
+
+## Optional Creators API access test
+
+Creators API remains optional and does not gate the normal affiliate-link or Amazon Programs functionality.
+
+A safe Amazon.de diagnostic is available as:
+
+`npm run amazon:api:test`
+
+It uses OAuth 2.0 Client Credentials, the saved Amazon.de tracking ID, and one official SearchItems request. Secrets stay in the private environment file and are never printed. See [docs/CREATORS_API_TEST.md](docs/CREATORS_API_TEST.md).
+
+A successful credential/token exchange is not treated as proof of product-data eligibility; `AssociateNotEligible` is reported separately.

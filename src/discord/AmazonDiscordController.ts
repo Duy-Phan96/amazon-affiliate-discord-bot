@@ -17,11 +17,12 @@ import { listAmazonPrograms, getAmazonProgram, type AmazonProgramKey } from '../
 import { AmazonProgramLinkService } from '../services/AmazonProgramLinkService.js';
 import { ProgramTemplateRenderer } from '../services/ProgramTemplateRenderer.js';
 import { AmazonProgramTemplateRepository, type AmazonProgramTemplateRow } from '../repositories/AmazonProgramTemplateRepository.js';
+import { paginateChannelChoices, type ChannelChoicePage } from '../services/ChannelPagination.js';
 
 type UI = ChatInputCommandInteraction | MessageComponentInteraction | ModalSubmitInteraction;
-type SetupData = { config: SetupConfig; revision: number };
+type SetupData = { config: SetupConfig; revision: number; channelPage: number };
 type ProductData = { url: string; title: string; note: string; channel?: string; revision: number };
-type ProgramPostData = { programKey: AmazonProgramKey; body: string; templateName: string; channel?: string; revision: number; templateId?: number };
+type ProgramPostData = { programKey: AmazonProgramKey; body: string; templateName: string; channel?: string; revision: number; templateId?: number; channelPage: number };
 const LABELS = { DE: 'Amazon.de', US: 'Amazon.com', UK: 'Amazon.co.uk' };
 const ONE_LINK = 'https://affiliate-program.amazon.com/help/node/topic/GKHRXG4YEJBTCAFC';
 const DISCLOSURE_GUIDE = 'https://partnernet.amazon.de/help/node/topic/GHQNZAU6669EZS98';
@@ -97,6 +98,7 @@ export class AmazonDiscordController {
       const active = this.repo.listMarketplaces(guildId).filter(m => m.enabled);
       const draft = this.setup.create(i.id, guildId, i.user.id, 'mode', {
         revision: current.revision,
+        channelPage: 0,
         config: { productMode: current.product_mode, marketplaces: active.map(m => m.marketplace),
           tags: Object.fromEntries(active.map(m => [m.marketplace, m.affiliate_tag])),
           oneLinkDeclared: active.some(m => !!m.onelink_enabled),
@@ -118,6 +120,41 @@ export class AmazonDiscordController {
     const content = `**Amazon ${sub === 'status' ? 'Status' : 'Settings'}**\nMode: ${g.product_mode}\nLink behavior: ${g.link_mode}\nMarketplaces: ${markets.map(m => LABELS[m.marketplace]).join(', ') || 'Not configured'}\nChannels: ${channels.map(c => `<#${c.channel_id}>`).join(', ') || 'Not configured'}\nOneLink: ${markets.some(m => m.onelink_enabled) ? 'Optional Amazon-side setup declared by operator' : 'Optional · not configured'}\nAmazon Programs: ${programReady ? '3 available' : 'Requires Amazon.de Affiliate tracking ID'}\nProgram templates: ${activeTemplates} active\nServer scope: ${this.allowedGuildId ? 'Restricted to this test server' : 'Configured servers'}\n\nAPI access is not required for this version.\nUnresolved delivery attempts: ${this.deliveries.unresolved(guildId)}\nUse /amazon setup to edit, /amazon link for a private product link, /amazon product for a product post, or /amazon programs for Amazon program posts.`;
     return this.show(i, content, [buttons(link(ONE_LINK, 'OneLink setup'), link(DISCLOSURE_GUIDE, 'Disclosure guide'))]);
   }
+  private async getChannelPage(guildId: string, requestedPage: number, allowedIds?: string[]): Promise<ChannelChoicePage> {
+    const guild = await this.client.guilds.fetch(guildId);
+    const fetched = await guild.channels.fetch();
+    const allowed = allowedIds ? new Set(allowedIds) : null;
+    const choices = [...fetched.values()]
+      .filter(channel => channel && channel.type === ChannelType.GuildText && (!allowed || allowed.has(channel.id)))
+      .map(channel => {
+        const value = channel as any;
+        return {
+          id: value.id as string,
+          name: String(value.name ?? 'channel'),
+          category: value.parent?.name ? String(value.parent.name) : undefined,
+          position: Number(value.rawPosition ?? value.position ?? 0),
+        };
+      });
+    return paginateChannelChoices(choices, requestedPage, 20);
+  }
+
+  private channelSelectRow(customId: string, page: ChannelChoicePage, selectedIds: string[] = []) {
+    if (!page.items.length) return null;
+    const selected = new Set(selectedIds);
+    const menu = new StringSelectMenuBuilder()
+      .setCustomId(customId)
+      .setPlaceholder(`Select channels · page ${page.page + 1}/${page.totalPages}`)
+      .setMinValues(0)
+      .setMaxValues(Math.min(5, page.items.length))
+      .addOptions(...page.items.map(channel => ({
+        label: `# ${channel.name}`.slice(0, 100),
+        value: channel.id,
+        description: (channel.category ? `Category: ${channel.category}` : 'No category').slice(0, 100),
+        default: selected.has(channel.id),
+      })));
+    return new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(menu);
+  }
+
   private async setupView(i: UI, id: string, draft: Draft<SetupData>) {
     const c = draft.data.config;
     const key = (action: string) => `amazon:setup:${id}:${action}`;
@@ -136,9 +173,17 @@ export class AmazonDiscordController {
       content = '**Step 3 / 6 — OneLink (optional information)**\nOneLink is configured in Amazon PartnerNet, not in this bot. It is not required for product or program links. You can use individual marketplace tracking IDs without it.';
       rows.push(buttons(button(key('onelink_yes'), 'I use OneLink (optional)'), button(key('onelink_no'), 'Skip OneLink'), link(ONE_LINK, 'Open OneLink guide')));
     } else if (draft.step === 'channels') {
-      content = '**Step 4 / 6 — Product channels**\nChoose 1–5 text channels for manual posts and optional automatic link replies. Discord shows channels in one flat picker here, without category headers such as MARKETPLACE. If you started setup inside the channel you want, use **Use this channel**.';
-      rows.push(new ActionRowBuilder<ChannelSelectMenuBuilder>().addComponents(new ChannelSelectMenuBuilder().setCustomId(key('channels')).setPlaceholder('Choose product channels').setChannelTypes(ChannelType.GuildText).setMinValues(1).setMaxValues(5)));
-      rows.push(buttons(button(key('current_channel'), 'Use this channel', ButtonStyle.Primary)));
+      const page = await this.getChannelPage(i.guildId!, draft.data.channelPage);
+      draft.data.channelPage = page.page;
+      content = `**Step 4 / 6 — Product channels**\nChoose 1–5 text channels for manual posts and optional automatic link replies. Channels are paginated so none are hidden. Category names are shown inside the list.\n\nPage: **${page.page + 1} / ${page.totalPages}** · Selected: **${c.channels.length} / 5**`;
+      const select = this.channelSelectRow(key('channels'), page, c.channels);
+      if (select) rows.push(select);
+      const nav: ButtonBuilder[] = [];
+      if (page.page > 0) nav.push(button(key('channels_prev'), 'Previous'));
+      if (page.page + 1 < page.totalPages) nav.push(button(key('channels_next'), 'Next'));
+      nav.push(button(key('current_channel'), 'Use this channel', ButtonStyle.Primary));
+      nav.push(button(key('channels_continue'), 'Continue', ButtonStyle.Success));
+      rows.push(buttons(...nav));
     } else if (draft.step === 'behavior') {
       content = '**Step 5 / 6 — Automatic link replies**\nButtons or replies operate only in your selected channels. Off still allows private link generation and reviewed manual posts. Already-tagged links are skipped automatically. Original member messages stay untouched.';
       rows.push(new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(new StringSelectMenuBuilder().setCustomId(key('behavior')).setPlaceholder('Choose behavior').addOptions({ label: 'Off — manual posts only', value: 'OFF' }, { label: 'Compact Amazon button', value: 'BUTTON' }, { label: 'Reply with affiliate / product link', value: 'REPLY' })));
@@ -192,14 +237,29 @@ export class AmazonDiscordController {
       draft.step = 'onelink';
     } else if (['onelink_yes', 'onelink_no'].includes(action) && i.isButton()) {
       this.setup.requireStep(draft, 'onelink'); c.oneLinkDeclared = action === 'onelink_yes'; draft.step = 'channels';
-    } else if (action === 'channels' && i.isChannelSelectMenu()) {
-      this.setup.requireStep(draft, 'channels'); c.channels = i.values; draft.step = 'behavior';
+    } else if (action === 'channels' && i.isStringSelectMenu()) {
+      this.setup.requireStep(draft, 'channels');
+      const page = await this.getChannelPage(i.guildId!, draft.data.channelPage);
+      const pageIds = new Set(page.items.map(channel => channel.id));
+      const merged = [...c.channels.filter(channelId => !pageIds.has(channelId)), ...i.values];
+      c.channels = [...new Set(merged)];
+      if (c.channels.length > 5) throw new UserInputError('Choose at most five Amazon channels.');
+    } else if (action === 'channels_prev' && i.isButton()) {
+      this.setup.requireStep(draft, 'channels');
+      draft.data.channelPage = Math.max(0, draft.data.channelPage - 1);
+    } else if (action === 'channels_next' && i.isButton()) {
+      this.setup.requireStep(draft, 'channels');
+      draft.data.channelPage += 1;
+    } else if (action === 'channels_continue' && i.isButton()) {
+      this.setup.requireStep(draft, 'channels');
+      if (!c.channels.length) throw new UserInputError('Choose at least one Amazon channel.');
+      draft.step = 'behavior';
     } else if (action === 'current_channel' && i.isButton()) {
       this.setup.requireStep(draft, 'channels');
-      if (!i.channelId) throw new UserInputError('Run /amazon setup inside the text channel you want to use, or choose a channel from the picker.');
+      if (!i.channelId) throw new UserInputError('Run /amazon setup inside the text channel you want to use, or choose a channel from the list.');
       await this.targetChannel(i.guildId!, i.channelId, i.user.id);
-      c.channels = [i.channelId];
-      draft.step = 'behavior';
+      c.channels = [...new Set([...c.channels, i.channelId])];
+      if (c.channels.length > 5) throw new UserInputError('Choose at most five Amazon channels.');
     } else if (action === 'behavior' && i.isStringSelectMenu()) {
       this.setup.requireStep(draft, 'behavior');
       if (!['OFF', 'REPLY', 'BUTTON'].includes(i.values[0])) throw new UserInputError('Choose a valid link behavior.');
@@ -338,7 +398,7 @@ export class AmazonDiscordController {
     if (action === 'create' && i.isButton()) {
       const draftId = i.id;
       this.programPosts.create(draftId, i.guildId!, i.user.id, 'details', {
-        programKey: key, body: '', templateName: '', revision: this.repo.getGuild(i.guildId!).revision,
+        programKey: key, body: '', templateName: '', revision: this.repo.getGuild(i.guildId!).revision, channelPage: 0,
       });
       return i.showModal(this.programPostModal(draftId, key));
     }
@@ -362,16 +422,24 @@ export class AmazonDiscordController {
   }
 
   private async programChannelView(i: UI, id: string) {
-    return this.show(i, '**Choose a configured Amazon channel**\nThe program post will be previewed before publication. Discord shows a flat channel picker here; if you started this flow inside the channel you want, use **Use this channel**.', [
-      new ActionRowBuilder<ChannelSelectMenuBuilder>().addComponents(
-        new ChannelSelectMenuBuilder().setCustomId(`amazon:programpost:${id}:channel`).setChannelTypes(ChannelType.GuildText).setPlaceholder('Select configured channel')
-      ),
-      buttons(
-        button(`amazon:programpost:${id}:current_channel`, 'Use this channel', ButtonStyle.Primary),
-        button(`amazon:programpost:${id}:edit`, 'Edit Post'),
-        button(`amazon:programpost:${id}:cancel`, 'Cancel', ButtonStyle.Danger)
-      ),
-    ]);
+    const draft = this.programPosts.get(id, i.guildId!, i.user.id);
+    const configured = this.repo.listLinkChannels(i.guildId!).map(row => row.channel_id);
+    const page = await this.getChannelPage(i.guildId!, draft.data.channelPage, configured);
+    draft.data.channelPage = page.page;
+    const rows: ActionRowBuilder<MessageActionRowComponentBuilder>[] = [];
+    const select = this.channelSelectRow(`amazon:programpost:${id}:channel`, page, draft.data.channel ? [draft.data.channel] : []);
+    if (select) rows.push(select);
+    const nav: ButtonBuilder[] = [];
+    if (page.page > 0) nav.push(button(`amazon:programpost:${id}:channel_prev`, 'Previous'));
+    if (page.page + 1 < page.totalPages) nav.push(button(`amazon:programpost:${id}:channel_next`, 'Next'));
+    nav.push(button(`amazon:programpost:${id}:current_channel`, 'Use this channel', ButtonStyle.Primary));
+    nav.push(button(`amazon:programpost:${id}:edit`, 'Edit Post'));
+    nav.push(button(`amazon:programpost:${id}:cancel`, 'Cancel', ButtonStyle.Danger));
+    rows.push(buttons(...nav));
+    return this.show(i,
+      `**Choose a configured Amazon channel**\nAll configured channels are paginated; category names are shown in the list.\n\nPage: **${page.page + 1} / ${page.totalPages}**`,
+      rows,
+    );
   }
 
   private renderProgramDraft(guildId: string, data: ProgramPostData) {
@@ -412,13 +480,21 @@ export class AmazonDiscordController {
     }
     if (action === 'edit' && i.isButton()) return i.showModal(this.programPostModal(id, draft.data.programKey, draft.data.body, draft.data.templateName));
     if (action === 'back' && i.isButton()) { draft.step = 'channel'; return this.programChannelView(i, id); }
-    if (action === 'channel' && i.isChannelSelectMenu()) {
-      if (!this.repo.isLinkChannel(i.guildId!, i.values[0])) throw new UserInputError('This channel is not configured. Run /amazon setup first.');
+    if (action === 'channel' && i.isStringSelectMenu()) {
+      if (!i.values[0] || !this.repo.isLinkChannel(i.guildId!, i.values[0])) throw new UserInputError('This channel is not configured. Run /amazon setup first.');
       await i.deferUpdate();
       await this.targetChannel(i.guildId!, i.values[0], i.user.id);
       draft.data.channel = i.values[0];
       draft.step = 'review';
       return this.programPreview(i, id);
+    }
+    if (action === 'channel_prev' && i.isButton()) {
+      draft.data.channelPage = Math.max(0, draft.data.channelPage - 1);
+      return this.programChannelView(i, id);
+    }
+    if (action === 'channel_next' && i.isButton()) {
+      draft.data.channelPage += 1;
+      return this.programChannelView(i, id);
     }
     if (action === 'current_channel' && i.isButton()) {
       if (!i.channelId) throw new UserInputError('Start the program flow inside the text channel you want to use, or choose a channel from the picker.');
@@ -504,7 +580,7 @@ export class AmazonDiscordController {
       const draftId = i.id;
       const draft = this.programPosts.create(draftId, i.guildId!, i.user.id, 'channel', {
         programKey: row.program_key as AmazonProgramKey, body: row.body, templateName: row.name,
-        channel: row.channel_id ?? undefined, revision: this.repo.getGuild(i.guildId!).revision, templateId: row.id,
+        channel: row.channel_id ?? undefined, revision: this.repo.getGuild(i.guildId!).revision, templateId: row.id, channelPage: 0,
       });
       if (draft.data.channel && this.repo.isLinkChannel(i.guildId!, draft.data.channel)) {
         await this.targetChannel(i.guildId!, draft.data.channel, i.user.id);

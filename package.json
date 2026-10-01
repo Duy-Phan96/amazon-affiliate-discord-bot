@@ -11,7 +11,8 @@
     "test:core": "tsc -p tsconfig.core.json && node --test tests/core-check.mjs",
     "test:tooling": "node --test tests/tooling-check.mjs",
     "doctor": "node scripts/doctor.mjs",
-    "commands:register": "node scripts/register-guild.mjs"
+    "commands:register": "node scripts/register-guild.mjs",
+    "amazon:api:test": "node scripts/test-amazon-creators-api.mjs"
   },
   "dependencies": {
     "discord.js": "^14.16.3",
@@ -26,5 +27,7 @@
     "@types/node": "^22.10.2",
     "@types/better-sqlite3": "^7.6.12"
   },
-  "engines": { "node": ">=22.12.0" }
+  "engines": {
+    "node": ">=22.12.0"
+  }
 }
