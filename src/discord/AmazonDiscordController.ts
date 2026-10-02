@@ -536,7 +536,7 @@ export class AmazonDiscordController {
       button('amazon:queue:dashboard:refresh', '🔄 Refresh'),
     );
     return this.show(i,
-      `**Amazon Queue Manager**\nStatus: **${status}**\nChannel: ${channel}\nInterval: **${queue?.interval_hours ?? 24}h**\nPending posts: **${pending.length}**\nNext automatic post: ${next}\n\nUse **Add Post** for a clean Markdown editor. The bot replaces `{affiliate_link}` when publishing and adds the affiliate disclosure automatically.`,
+      `**Amazon Queue Manager**\nStatus: **${status}**\nChannel: ${channel}\nInterval: **${queue?.interval_hours ?? 24}h**\nPending posts: **${pending.length}**\nNext automatic post: ${next}\n\nUse **Add Post** for a clean Markdown editor. The bot replaces {affiliate_link} when publishing and adds the affiliate disclosure automatically.`,
       [primary, secondary],
     );
   }
