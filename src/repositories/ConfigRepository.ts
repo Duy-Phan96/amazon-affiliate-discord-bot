@@ -21,6 +21,16 @@ export class ConfigRepository implements AffiliateTagRepository, ProductLinkConf
     return row?.affiliate_tag || null;
   }
   getProductMode(guildId: string) { return this.getGuild(guildId).product_mode; }
+  getPrimaryMarketplace(guildId: string): MarketplaceCode | null {
+    const value = this.getGuild(guildId).primary_marketplace;
+    return value === 'SOURCE' ? null : value;
+  }
+  setPrimaryMarketplace(guildId: string, marketplace: MarketplaceCode | null) {
+    this.ensureGuild(guildId);
+    if (marketplace && !this.isMarketplaceEnabled(guildId, marketplace)) throw new UserInputError('Enable this marketplace and save its tracking ID before making it primary.');
+    this.database.db.prepare('UPDATE guild_configs SET primary_marketplace=? WHERE guild_id=?').run(marketplace ?? 'SOURCE', guildId);
+    this.changed(guildId);
+  }
   isMarketplaceEnabled(guildId: string, marketplace: MarketplaceCode) { return this.listMarketplaces(guildId).some(m => m.marketplace === marketplace && m.enabled === 1); }
   setLinkMode(guildId: string, mode: LinkMode) { this.ensureGuild(guildId); this.database.db.prepare('UPDATE guild_configs SET link_mode=? WHERE guild_id=?').run(mode, guildId); this.changed(guildId); }
   setDisclosure(guildId: string, disclosure: string) { this.ensureGuild(guildId); this.database.db.prepare('UPDATE guild_configs SET disclosure=? WHERE guild_id=?').run(disclosure, guildId); this.changed(guildId); }

@@ -85,6 +85,7 @@ export class AmazonDiscordController {
       else if (kind === 'templateedit') await this.templateEditAction(i, id, action);
       else if (kind === 'queue') await this.queueAction(i, id, action);
       else if (kind === 'queuedraft') await this.queueDraftAction(i, id, action);
+      else if (kind === 'settings') await this.settingsAction(i, id, action);
       else throw new UserInputError('This is an old control. Start the relevant /amazon command again.');
     } catch (error) {
       const content = error instanceof UserInputError ? error.message : 'The action could not be completed. Check the bot permissions and start the command again.';
@@ -168,15 +169,45 @@ export class AmazonDiscordController {
       return i.showModal(this.productModal(i.id));
     }
     if (sub === 'programs') return this.programsHome(i);
+    if (sub === 'settings') return this.settingsView(i);
     if (sub === 'guide') return this.show(i, '**Affiliate links — no product API needed**\nUse /amazon link url:<full product URL> to get your link privately. Use /amazon product for a preview before a public post. With BUTTON or REPLY enabled, new untagged Amazon links in configured channels receive a bot reply automatically. Already-tagged links are skipped automatically.\n\nAffiliate mode uses your real ID for each original marketplace. Basic mode remains available without a partner account. Only full DE/US/UK product URLs are supported; expand amzn.to / amzn.eu links yourself. A product name alone is not a product lookup.\n\nOneLink is optional and configured with Amazon. A saved declaration does not verify Discord redirection or account approval. No live prices, pictures or deals are fetched. Check that your actual Discord/site usage is accepted by Amazon and provide the separate account/site disclosure.', [buttons(link(ONE_LINK, 'Amazon OneLink guide'), link(DISCLOSURE_GUIDE, 'Why disclose affiliate links?'))]);
     const g = this.repo.getGuild(guildId);
     const markets = this.repo.listMarketplaces(guildId).filter(m => m.enabled);
     const channels = this.repo.listLinkChannels(guildId);
     const programReady = (() => { try { this.programLinks.generate(guildId, 'amazon_visa'); return true; } catch { return false; } })();
     const activeTemplates = this.templates?.activeCount(guildId) ?? 0;
-    const content = `**Amazon ${sub === 'status' ? 'Status' : 'Settings'}**\nMode: ${g.product_mode}\nLink behavior: ${g.link_mode}\nMarketplaces: ${markets.map(m => LABELS[m.marketplace]).join(', ') || 'Not configured'}\nChannels: ${channels.map(c => `<#${c.channel_id}>`).join(', ') || 'Not configured'}\nOneLink: ${markets.some(m => m.onelink_enabled) ? 'Optional Amazon-side setup declared by operator' : 'Optional · not configured'}\nAmazon Programs: ${programReady ? '3 available' : 'Requires Amazon.de Affiliate tracking ID'}\nProgram templates: ${activeTemplates} active\nServer scope: ${this.allowedGuildId ? 'Restricted to this test server' : 'Configured servers'}\n\nAPI access is not required for this version.\nUnresolved delivery attempts: ${this.deliveries.unresolved(guildId)}\nUse /amazon setup to edit, /amazon link for a private product link, /amazon product for a product post, or /amazon programs for Amazon program posts.`;
+    const primary = g.primary_marketplace === 'SOURCE' ? 'Same as pasted product link' : LABELS[g.primary_marketplace];
+    const content = `**Amazon Status**\nMode: ${g.product_mode}\nLink behavior: ${g.link_mode}\nPrimary marketplace: **${primary}**\nMarketplaces: ${markets.map(m => LABELS[m.marketplace]).join(', ') || 'Not configured'}\nChannels: ${channels.map(c => `<#${c.channel_id}>`).join(', ') || 'Not configured'}\nOneLink: ${markets.some(m => m.onelink_enabled) ? 'Optional Amazon-side setup declared by operator' : 'Optional · not configured'}\nAmazon Programs: ${programReady ? '3 available' : 'Requires Amazon.de Affiliate tracking ID'}\nProgram templates: ${activeTemplates} active\nServer scope: ${this.allowedGuildId ? 'Restricted to this test server' : 'Configured servers'}\n\nAPI access is not required for this version.\nUnresolved delivery attempts: ${this.deliveries.unresolved(guildId)}`;
     return this.show(i, content, [buttons(link(ONE_LINK, 'OneLink setup'), link(DISCLOSURE_GUIDE, 'Disclosure guide'))]);
   }
+  private async settingsView(i: UI) {
+    const g = this.repo.getGuild(i.guildId!);
+    const markets = this.repo.listMarketplaces(i.guildId!).filter(m => m.enabled);
+    const enabled = new Set(markets.map(m => m.marketplace));
+    const current = g.primary_marketplace;
+    const primaryLabel = current === 'SOURCE' ? 'Source marketplace' : LABELS[current];
+    const selector = buttons(
+      button('amazon:settings:primary:SOURCE', 'Source', current === 'SOURCE' ? ButtonStyle.Primary : ButtonStyle.Secondary),
+      button('amazon:settings:primary:DE', 'DE', current === 'DE' ? ButtonStyle.Primary : ButtonStyle.Secondary).setDisabled(!enabled.has('DE')),
+      button('amazon:settings:primary:US', 'US (.com)', current === 'US' ? ButtonStyle.Primary : ButtonStyle.Secondary).setDisabled(!enabled.has('US')),
+      button('amazon:settings:primary:UK', 'UK (.co.uk)', current === 'UK' ? ButtonStyle.Primary : ButtonStyle.Secondary).setDisabled(!enabled.has('UK')),
+    );
+    const warning = current === 'SOURCE'
+      ? 'Links stay on the marketplace you pasted.'
+      : 'Cross-marketplace mode reuses the ASIN on the selected Amazon store. Verify the listing: an ASIN may be unavailable or different on another marketplace. OneLink redirection is handled by Amazon and is not guaranteed by this bot.';
+    return this.show(i,
+      `**Amazon Settings**\n\n**Primary Marketplace / Tracking ID**\nCurrent: **${primaryLabel}**\n${warning}\n\nEnabled IDs:\n${markets.map(m => `• ${LABELS[m.marketplace]} — ${m.affiliate_tag}`).join('\n') || '_No affiliate IDs configured._'}\n\nThis setting affects newly generated product and queue links. Existing queued source URLs are kept; the affiliate link is resolved when previewed or published.`,
+      [selector, buttons(button('amazon:settings:primary:SOURCE', 'Reset to Source'), link(ONE_LINK, 'OneLink guide'))],
+    );
+  }
+
+  private async settingsAction(i: MessageComponentInteraction | ModalSubmitInteraction, id: string, action: string) {
+    if (id !== 'primary' || !i.isButton()) throw new UserInputError('This settings control is no longer current.');
+    if (!['SOURCE','DE','US','UK'].includes(action)) throw new UserInputError('Unknown marketplace setting.');
+    this.repo.setPrimaryMarketplace(i.guildId!, action === 'SOURCE' ? null : action as MarketplaceCode);
+    return this.settingsView(i);
+  }
+
   private async getChannelPage(guildId: string, requestedPage: number, allowedIds?: string[]): Promise<ChannelChoicePage> {
     const guild = await this.client.guilds.fetch(guildId);
     const fetched = await guild.channels.fetch();
@@ -221,7 +252,7 @@ export class AmazonDiscordController {
       content = '**Step 1 / 6 — What do you need?**\nAffiliate: turn product URLs into your own affiliate links. No product API is needed.\nBasic: share products without tracking or an Associates account.\nNothing changes until you review and save.';
       rows.push(new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(new StringSelectMenuBuilder().setCustomId(key('mode')).setPlaceholder('Choose Affiliate or Basic').addOptions({ label: 'Affiliate — my tracking IDs', value: 'AFFILIATE' }, { label: 'Basic — no partner account', value: 'BASIC' })));
     } else if (draft.step === 'marketplaces') {
-      content = '**Step 2 / 6 — Choose marketplaces**\nOnly select the stores you intend to use. Product domains are never swapped. This release supports DE, US and UK.';
+      content = '**Step 2 / 6 — Choose marketplaces**\nOnly select stores for which you have a real tracking ID. This release supports DE, US and UK. You can later choose a Primary Marketplace in /amazon settings; Source remains the safest default.';
       rows.push(new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(new StringSelectMenuBuilder().setCustomId(key('marketplaces')).setPlaceholder('Select marketplaces').setMinValues(1).setMaxValues(3).addOptions(...Object.keys(MARKETPLACES).map(code => ({ label: LABELS[code as MarketplaceCode], value: code, default: c.marketplaces.includes(code as MarketplaceCode) })))));
     } else if (draft.step === 'tags') {
       content = '**Step 2 / 6 — Your tracking IDs**\nEnter the actual ID for each chosen store. Never change an ID suffix to invent a foreign ID. Do not enter API credentials.';
@@ -536,7 +567,7 @@ export class AmazonDiscordController {
       button('amazon:queue:dashboard:refresh', '🔄 Refresh'),
     );
     return this.show(i,
-      `**Amazon Queue Manager**\nStatus: **${status}**\nChannel: ${channel}\nInterval: **${queue?.interval_hours ?? 24}h**\nPending posts: **${pending.length}**\nNext automatic post: ${next}\n\nUse **Add Post** for a clean Markdown editor. The bot replaces {affiliate_link} when publishing and adds the affiliate disclosure automatically.`,
+      `**Amazon Queue Manager**\nStatus: **${status}**\nPrimary marketplace: **${this.repo.getGuild(i.guildId!).primary_marketplace === 'SOURCE' ? 'Source' : LABELS[this.repo.getGuild(i.guildId!).primary_marketplace as MarketplaceCode]}**\nChannel: ${channel}\nInterval: **${queue?.interval_hours ?? 24}h**\nPending posts: **${pending.length}**\nNext automatic post: ${next}\n\nUse **Add Post** for a clean Markdown editor. The bot replaces {affiliate_link} when publishing and adds the affiliate disclosure automatically.`,
       [primary, secondary],
     );
   }

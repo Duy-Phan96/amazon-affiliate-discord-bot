@@ -6,6 +6,7 @@ import Database from 'better-sqlite3';
 import { AppDatabase } from '../src/persistence/Database.js';
 import { ConfigRepository } from '../src/repositories/ConfigRepository.js';
 import { DeliveryRepository } from '../src/repositories/DeliveryRepository.js';
+import { ProductLinkService } from '../src/services/ProductLinkService.js';
 import type { SetupConfig } from '../src/domain/config.js';
 const a = '123456789012345678'; const b = '123456789012345679';
 const config = (): SetupConfig => ({ productMode:'AFFILIATE',marketplaces:['DE'],tags:{DE:'example-21'},oneLinkDeclared:false,channels:[a],linkMode:'BUTTON' });
@@ -50,5 +51,56 @@ describe('API-free configuration and deliveries', () => {
     try { const legacy=new Database(file);legacy.exec("CREATE TABLE guild_configs(guild_id TEXT PRIMARY KEY,disclosure TEXT NOT NULL DEFAULT '',link_mode TEXT NOT NULL DEFAULT 'OFF',created_at TEXT NOT NULL,updated_at TEXT NOT NULL); INSERT INTO guild_configs(guild_id,created_at,updated_at) VALUES('old','date','date');");legacy.close();
       for(let n=0;n<2;n++){const db=new AppDatabase(file);try {expect(new ConfigRepository(db).getGuild('old').product_mode).toBe('AFFILIATE');}finally{db.close();}}
     } finally {rmSync(directory,{recursive:true,force:true});}
+  });
+});
+
+
+describe('primary marketplace links', () => {
+  it('defaults to the marketplace from the pasted URL', () => {
+    const db = new AppDatabase(':memory:');
+    try {
+      const repo = new ConfigRepository(db);
+      repo.saveSetup('g', {
+        productMode:'AFFILIATE',
+        marketplaces:['DE','US'],
+        tags:{DE:'gamer-de-21',US:'gamer-us-20'},
+        oneLinkDeclared:true,
+        channels:[a],
+        linkMode:'BUTTON'
+      }, 0);
+      const result = new ProductLinkService(repo).generate('g','https://www.amazon.de/dp/B0ABCDEF12');
+      expect(result.url).toBe('https://www.amazon.de/dp/B0ABCDEF12?tag=gamer-de-21');
+      expect(repo.getGuild('g').primary_marketplace).toBe('SOURCE');
+    } finally { db.close(); }
+  });
+
+  it('can use Amazon.com and the saved US tracking ID as the primary outbound marketplace', () => {
+    const db = new AppDatabase(':memory:');
+    try {
+      const repo = new ConfigRepository(db);
+      repo.saveSetup('g', {
+        productMode:'AFFILIATE',
+        marketplaces:['DE','US'],
+        tags:{DE:'gamer-de-21',US:'gamer-us-20'},
+        oneLinkDeclared:true,
+        channels:[a],
+        linkMode:'BUTTON'
+      }, 0);
+      repo.setPrimaryMarketplace('g','US');
+      const result = new ProductLinkService(repo).generate('g','https://www.amazon.de/dp/B0ABCDEF12');
+      expect(result.sourceMarketplace).toBe('DE');
+      expect(result.marketplace).toBe('US');
+      expect(result.marketplaceOverridden).toBe(true);
+      expect(result.url).toBe('https://www.amazon.com/dp/B0ABCDEF12?tag=gamer-us-20');
+    } finally { db.close(); }
+  });
+
+  it('does not allow a disabled marketplace to become primary', () => {
+    const db = new AppDatabase(':memory:');
+    try {
+      const repo = new ConfigRepository(db);
+      repo.saveSetup('g', config(), 0);
+      expect(() => repo.setPrimaryMarketplace('g','US')).toThrow(/Enable this marketplace/);
+    } finally { db.close(); }
   });
 });

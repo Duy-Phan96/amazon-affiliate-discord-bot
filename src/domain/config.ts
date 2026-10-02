@@ -11,7 +11,7 @@ export interface SetupConfig {
 }
 export interface GuildRow {
   guild_id: string; disclosure: string; link_mode: LinkMode;
-  product_mode: ProductMode; revision: number; created_at: string; updated_at: string;
+  product_mode: ProductMode; revision: number; primary_marketplace: 'SOURCE' | MarketplaceCode; created_at: string; updated_at: string;
 }
 export interface MarketplaceRow {
   marketplace: MarketplaceCode; affiliate_tag: string; enabled: number; onelink_enabled: number;

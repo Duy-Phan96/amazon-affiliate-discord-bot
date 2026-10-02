@@ -61,6 +61,7 @@ export class AppDatabase {
     // Existing installations remain Affiliate. New guild inserts explicitly choose Basic.
     if (!columns.includes('product_mode')) this.db.exec("ALTER TABLE guild_configs ADD COLUMN product_mode TEXT NOT NULL DEFAULT 'AFFILIATE'");
     if (!columns.includes('revision')) this.db.exec('ALTER TABLE guild_configs ADD COLUMN revision INTEGER NOT NULL DEFAULT 0');
+    if (!columns.includes('primary_marketplace')) this.db.exec("ALTER TABLE guild_configs ADD COLUMN primary_marketplace TEXT NOT NULL DEFAULT 'SOURCE'");
   })();
   }
   close(){this.db.close()}
