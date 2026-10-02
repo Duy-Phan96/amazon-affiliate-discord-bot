@@ -21,11 +21,13 @@ import { paginateChannelChoices, type ChannelChoicePage } from '../services/Chan
 import { buildQuickProductPresentation, buildSmartAutoCopy, inferProductTitleFromAmazonUrl } from '../services/ProductUrlPresentation.js';
 import { AmazonPostQueueRepository, type QueueItemStyle } from '../repositories/AmazonPostQueueRepository.js';
 import { AmazonQueueScheduler } from '../services/AmazonQueueScheduler.js';
+import { AffiliateMarkdownRenderer } from '../services/AffiliateMarkdownRenderer.js';
 
 type UI = ChatInputCommandInteraction | MessageComponentInteraction | ModalSubmitInteraction;
 type SetupData = { config: SetupConfig; revision: number; channelPage: number };
 type ProductData = { url: string; title: string; note: string; channel?: string; revision: number };
 type ProgramPostData = { programKey: AmazonProgramKey; body: string; templateName: string; channel?: string; revision: number; templateId?: number; channelPage: number };
+type QueueDraftData = { url: string; name: string; body: string; itemId?: number };
 const LABELS = { DE: 'Amazon.de', US: 'Amazon.com', UK: 'Amazon.co.uk' };
 const ONE_LINK = 'https://affiliate-program.amazon.com/help/node/topic/GKHRXG4YEJBTCAFC';
 const DISCLOSURE_GUIDE = 'https://partnernet.amazon.de/help/node/topic/GHQNZAU6669EZS98';
@@ -39,9 +41,11 @@ export class AmazonDiscordController {
   private setup = new DraftStore<SetupData>();
   private products = new DraftStore<ProductData>();
   private programPosts = new DraftStore<ProgramPostData>();
+  private queueDrafts = new DraftStore<QueueDraftData>();
   private links: ProductLinkService;
   private programLinks: AmazonProgramLinkService;
   private programRenderer = new ProgramTemplateRenderer();
+  private affiliateMarkdown = new AffiliateMarkdownRenderer();
   constructor(
     private client: Client,
     private repo: ConfigRepository,
@@ -79,6 +83,8 @@ export class AmazonDiscordController {
       else if (kind === 'programpost') await this.programPostAction(i, id, action);
       else if (kind === 'template') await this.templateAction(i, id, action);
       else if (kind === 'templateedit') await this.templateEditAction(i, id, action);
+      else if (kind === 'queue') await this.queueAction(i, id, action);
+      else if (kind === 'queuedraft') await this.queueDraftAction(i, id, action);
       else throw new UserInputError('This is an old control. Start the relevant /amazon command again.');
     } catch (error) {
       const content = error instanceof UserInputError ? error.message : 'The action could not be completed. Check the bot permissions and start the command again.';
@@ -398,6 +404,8 @@ export class AmazonDiscordController {
     const guildId = i.guildId!;
     const queues = this.requireQueue();
 
+    if (sub === 'manage') return this.queueDashboard(i);
+
     if (sub === 'add') {
       const url = i.options.getString('url', true).trim();
       this.links.generate(guildId, url);
@@ -450,9 +458,11 @@ export class AmazonDiscordController {
       const presentation = buildQuickProductPresentation(item.url, item.title, item.body);
       const useEmbed = item.style === 'EMBED';
       const useNativePreview = item.style === 'AUTO';
-      const previewBody = useNativePreview
-        ? buildSmartAutoCopy(escapeMarkdown(presentation.title), result.url, result.affiliate)
-        : `${result.affiliate ? DISCLOSURE : 'Amazon product link · No affiliate tag added.'}${!useEmbed && presentation.title !== `Amazon product ${result.asin}` ? `\n**${escapeMarkdown(presentation.title)}**` : ''}`;
+      const previewBody = item.style === 'MARKDOWN' && item.body
+        ? this.affiliateMarkdown.render(item.body, result.url)
+        : useNativePreview
+          ? buildSmartAutoCopy(escapeMarkdown(presentation.title), result.url, result.affiliate)
+          : `${result.affiliate ? DISCLOSURE : 'Amazon product link · No affiliate tag added.'}${!useEmbed && presentation.title !== `Amazon product ${result.asin}` ? `\n**${escapeMarkdown(presentation.title)}**` : ''}`;
       const content = `**Queue Preview — not published**\nItem: **#${item.id}** · Style: **${item.style}**\n\n${previewBody}`;
       const embeds = useEmbed
         ? [new EmbedBuilder()
@@ -507,6 +517,276 @@ export class AmazonDiscordController {
 
     throw new UserInputError('Unknown Amazon queue action.');
   }
+
+  private async queueDashboard(i: UI) {
+    const queues = this.requireQueue();
+    const queue = queues.get(i.guildId!);
+    const pending = queues.pending(i.guildId!);
+    const status = queue?.enabled ? 'Running' : 'Paused';
+    const channel = queue?.channel_id ? `<#${queue.channel_id}>` : 'Not configured';
+    const next = queue?.next_run_at ? `<t:${Math.floor(queue.next_run_at / 1000)}:R>` : 'Not scheduled';
+    const primary = buttons(
+      button('amazon:queue:dashboard:add', '➕ Add Post', ButtonStyle.Primary),
+      button('amazon:queue:dashboard:view', '📋 View Queue'),
+      button('amazon:queue:dashboard:toggle', queue?.enabled ? '⏸ Pause' : '▶ Start'),
+    );
+    const secondary = buttons(
+      button('amazon:queue:dashboard:settings', '⚙️ Queue Settings'),
+      button('amazon:queue:dashboard:next', '⏭ Post Next'),
+      button('amazon:queue:dashboard:refresh', '🔄 Refresh'),
+    );
+    return this.show(i,
+      `**Amazon Queue Manager**\nStatus: **${status}**\nChannel: ${channel}\nInterval: **${queue?.interval_hours ?? 24}h**\nPending posts: **${pending.length}**\nNext automatic post: ${next}\n\nUse **Add Post** for a clean Markdown editor. The bot replaces `{affiliate_link}` when publishing and adds the affiliate disclosure automatically.`,
+      [primary, secondary],
+    );
+  }
+
+  private queuePostModal(id: string, draft?: QueueDraftData) {
+    const url = new TextInputBuilder()
+      .setCustomId('url').setLabel('Amazon product URL')
+      .setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(1500)
+      .setPlaceholder('https://www.amazon.de/.../dp/ASIN');
+    if (draft?.url) url.setValue(draft.url.slice(0, 1500));
+
+    const body = new TextInputBuilder()
+      .setCustomId('body').setLabel('Post message (Markdown)')
+      .setStyle(TextInputStyle.Paragraph).setRequired(true).setMaxLength(1600)
+      .setPlaceholder('🖱️ **Product name**\n\nShort description.\n\n👉 {affiliate_link}');
+    if (draft?.body) body.setValue(draft.body.slice(0, 1600));
+
+    const name = new TextInputBuilder()
+      .setCustomId('name').setLabel('Internal name (optional)')
+      .setStyle(TextInputStyle.Short).setRequired(false).setMaxLength(80)
+      .setPlaceholder('G305 mouse');
+    if (draft?.name) name.setValue(draft.name.slice(0, 80));
+
+    return new ModalBuilder()
+      .setCustomId(`amazon:queuedraft:${id}:details`)
+      .setTitle(draft?.itemId ? 'Edit queued Amazon post' : 'Add Amazon queue post')
+      .addComponents(
+        new ActionRowBuilder<TextInputBuilder>().addComponents(url),
+        new ActionRowBuilder<TextInputBuilder>().addComponents(body),
+        new ActionRowBuilder<TextInputBuilder>().addComponents(name),
+      );
+  }
+
+  private async queueDraftPreview(i: UI, id: string) {
+    const draft = this.queueDrafts.get(id, i.guildId!, i.user.id);
+    const result = this.links.generate(i.guildId!, draft.data.url);
+    const rendered = this.affiliateMarkdown.render(draft.data.body, result.url);
+    return this.show(i,
+      `**Preview — not added to queue**\n${draft.data.name ? `Internal name: **${escapeMarkdown(draft.data.name)}**\n` : ''}\n${rendered}`,
+      [
+        buttons(
+          button(`amazon:queuedraft:${id}:save`, draft.data.itemId ? 'Save Changes' : 'Add to Queue', ButtonStyle.Success),
+          button(`amazon:queuedraft:${id}:edit`, 'Edit'),
+          button(`amazon:queuedraft:${id}:cancel`, 'Cancel', ButtonStyle.Danger),
+        ),
+      ],
+    );
+  }
+
+  private async queueListView(i: UI) {
+    const pending = this.requireQueue().pending(i.guildId!);
+    if (!pending.length) return this.show(i, '**Amazon Queue**\nNo pending posts.', [buttons(button('amazon:queue:dashboard:back', 'Back'))]);
+    const select = new StringSelectMenuBuilder()
+      .setCustomId('amazon:queue:item:select')
+      .setPlaceholder('Choose a queued post')
+      .addOptions(...pending.slice(0, 25).map(item => ({
+        label: (item.title || inferProductTitleFromAmazonUrl(item.url) || `Queue item #${item.id}`).slice(0, 100),
+        value: String(item.id),
+        description: `#${item.id} · ${item.style}`.slice(0, 100),
+      })));
+    return this.show(i,
+      `**Queued Posts**\nPending: **${pending.length}**\nSelect a post to preview, edit or remove it.`,
+      [
+        new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(select),
+        buttons(button('amazon:queue:dashboard:back', 'Back')),
+      ],
+    );
+  }
+
+  private async queueItemView(i: UI, itemId: number) {
+    const item = this.requireQueue().getItem(i.guildId!, itemId);
+    if (item.state !== 'PENDING') throw new UserInputError('This queue item is no longer pending.');
+    const result = this.links.generate(i.guildId!, item.url);
+    const body = item.style === 'MARKDOWN' && item.body
+      ? this.affiliateMarkdown.render(item.body, result.url)
+      : buildSmartAutoCopy(item.title || inferProductTitleFromAmazonUrl(item.url) || `Amazon product ${result.asin}`, result.url, result.affiliate);
+    return this.show(i,
+      `**Queue Item #${item.id}**\nStyle: **${item.style}**\n\n${body}`,
+      [
+        buttons(
+          button(`amazon:queue:${item.id}:edit`, 'Edit', ButtonStyle.Primary),
+          button(`amazon:queue:${item.id}:remove`, 'Remove', ButtonStyle.Danger),
+          button(`amazon:queue:${item.id}:skip`, 'Skip'),
+        ),
+        buttons(button('amazon:queue:dashboard:view', 'Back to Queue')),
+      ],
+    );
+  }
+
+  private async queueSettingsView(i: UI) {
+    const queues = this.requireQueue();
+    const queue = queues.getOrCreate(i.guildId!, i.user.id);
+    const configured = this.repo.listLinkChannels(i.guildId!);
+    const guild = await this.client.guilds.fetch(i.guildId!);
+    const options = [];
+    for (const row of configured.slice(0, 25)) {
+      const channel = await guild.channels.fetch(row.channel_id).catch(() => null);
+      options.push({
+        label: channel?.name ? `# ${channel.name}`.slice(0, 100) : row.channel_id,
+        value: row.channel_id,
+        default: queue.channel_id === row.channel_id,
+      });
+    }
+    const rows: ActionRowBuilder<MessageActionRowComponentBuilder>[] = [];
+    if (options.length) {
+      rows.push(new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+        new StringSelectMenuBuilder()
+          .setCustomId('amazon:queue:settings:channel')
+          .setPlaceholder('Choose posting channel')
+          .addOptions(...options)
+      ));
+    }
+    rows.push(buttons(
+      button('amazon:queue:settings:12', 'Every 12h', queue.interval_hours === 12 ? ButtonStyle.Primary : ButtonStyle.Secondary),
+      button('amazon:queue:settings:24', 'Every 24h', queue.interval_hours === 24 ? ButtonStyle.Primary : ButtonStyle.Secondary),
+      button('amazon:queue:settings:current', 'Use this channel'),
+    ));
+    rows.push(buttons(button('amazon:queue:dashboard:back', 'Back')));
+    return this.show(i,
+      `**Queue Settings**\nChannel: ${queue.channel_id ? `<#${queue.channel_id}>` : 'Not configured'}\nInterval: **${queue.interval_hours}h**\n\nChoose where and how often queued posts should be published.`,
+      rows,
+    );
+  }
+
+  private async queueAction(i: MessageComponentInteraction | ModalSubmitInteraction, id: string, action: string) {
+    const queues = this.requireQueue();
+
+    if (id === 'dashboard') {
+      if (action === 'add' && i.isButton()) {
+        const draftId = i.id;
+        const draft = this.queueDrafts.create(draftId, i.guildId!, i.user.id, 'details', { url: '', name: '', body: '' });
+        return i.showModal(this.queuePostModal(draftId, draft.data));
+      }
+      if (action === 'view') return this.queueListView(i);
+      if (action === 'settings') return this.queueSettingsView(i);
+      if (action === 'refresh' || action === 'back') return this.queueDashboard(i);
+      if (action === 'next') {
+        const result = await this.requireQueueScheduler().runNow(i.guildId!);
+        if (result === 'SENT') return this.queueDashboard(i);
+        if (result === 'EMPTY') throw new UserInputError('The queue has no pending posts.');
+        throw new UserInputError('Delivery could not be confirmed. The queue was paused to prevent duplicates.');
+      }
+      if (action === 'toggle') {
+        const queue = queues.getOrCreate(i.guildId!, i.user.id);
+        if (queue.enabled) queues.pause(i.guildId!);
+        else {
+          if (!queue.channel_id) return this.queueSettingsView(i);
+          queues.resume(i.guildId!, Date.now() + queue.interval_hours * 60 * 60 * 1000);
+        }
+        return this.queueDashboard(i);
+      }
+    }
+
+    if (id === 'item' && action === 'select' && i.isStringSelectMenu()) {
+      return this.queueItemView(i, Number(i.values[0]));
+    }
+
+    if (id === 'settings') {
+      const current = queues.getOrCreate(i.guildId!, i.user.id);
+      if (action === 'channel' && i.isStringSelectMenu()) {
+        const channelId = i.values[0];
+        if (!this.repo.isLinkChannel(i.guildId!, channelId)) throw new UserInputError('That channel is not configured for Amazon.');
+        await this.targetChannel(i.guildId!, channelId, i.user.id);
+        queues.updateSettings(i.guildId!, i.user.id, channelId, current.interval_hours as 12 | 24);
+        return this.queueSettingsView(i);
+      }
+      if ((action === '12' || action === '24') && i.isButton()) {
+        queues.updateSettings(i.guildId!, i.user.id, current.channel_id, Number(action) as 12 | 24);
+        return this.queueSettingsView(i);
+      }
+      if (action === 'current' && i.isButton()) {
+        if (!i.channelId || !this.repo.isLinkChannel(i.guildId!, i.channelId)) throw new UserInputError('This channel is not configured for Amazon.');
+        await this.targetChannel(i.guildId!, i.channelId, i.user.id);
+        queues.updateSettings(i.guildId!, i.user.id, i.channelId, current.interval_hours as 12 | 24);
+        return this.queueSettingsView(i);
+      }
+    }
+
+    const itemId = Number(id);
+    if (Number.isSafeInteger(itemId) && itemId > 0) {
+      if (action === 'edit' && i.isButton()) {
+        const item = queues.getItem(i.guildId!, itemId);
+        const draftId = i.id;
+        const draft = this.queueDrafts.create(draftId, i.guildId!, i.user.id, 'details', {
+          url: item.url,
+          name: item.title ?? '',
+          body: item.style === 'MARKDOWN' && item.body ? item.body : `**${item.title || inferProductTitleFromAmazonUrl(item.url) || 'Amazon product'}**\n\n{affiliate_link}`,
+          itemId: item.id,
+        });
+        return i.showModal(this.queuePostModal(draftId, draft.data));
+      }
+      if (action === 'remove' && i.isButton()) {
+        queues.remove(i.guildId!, itemId);
+        return this.queueListView(i);
+      }
+      if (action === 'skip' && i.isButton()) {
+        queues.skip(i.guildId!, itemId);
+        return this.queueListView(i);
+      }
+    }
+
+    throw new UserInputError('This queue control is no longer current. Open /amazon queue manage again.');
+  }
+
+  private async queueDraftAction(i: MessageComponentInteraction | ModalSubmitInteraction, id: string, action: string) {
+    const draft = this.queueDrafts.get(id, i.guildId!, i.user.id);
+    if (action === 'cancel') {
+      this.queueDrafts.remove(id);
+      return this.queueDashboard(i);
+    }
+    if (action === 'edit' && i.isButton()) {
+      return i.showModal(this.queuePostModal(id, draft.data));
+    }
+    if (action === 'details' && i.isModalSubmit()) {
+      draft.data.url = i.fields.getTextInputValue('url').trim();
+      draft.data.body = i.fields.getTextInputValue('body').trim();
+      draft.data.name = i.fields.getTextInputValue('name').trim();
+      this.links.generate(i.guildId!, draft.data.url);
+      this.affiliateMarkdown.validate(draft.data.body);
+      draft.step = 'review';
+      return this.queueDraftPreview(i, id);
+    }
+    if (action === 'save' && i.isButton()) {
+      if (draft.step !== 'review') throw new UserInputError('Preview the post before saving it.');
+      const queues = this.requireQueue();
+      let item;
+      if (draft.data.itemId) {
+        item = queues.update(i.guildId!, draft.data.itemId, {
+          url: draft.data.url,
+          title: draft.data.name || null,
+          body: draft.data.body,
+          style: 'MARKDOWN',
+        });
+      } else {
+        item = queues.add(i.guildId!, i.user.id, {
+          url: draft.data.url,
+          title: draft.data.name || null,
+          body: draft.data.body,
+          style: 'MARKDOWN',
+        });
+      }
+      this.queueDrafts.remove(id);
+      return this.show(i,
+        `✅ **Added to queue**\nItem: **#${item.id}**\nPending posts: **${queues.pending(i.guildId!).length}**`,
+        [buttons(button('amazon:queue:dashboard:back', 'Back to Queue Manager', ButtonStyle.Primary))]
+      );
+    }
+    throw new UserInputError('This queue draft is no longer current.');
+  }
+
   private requireTemplates(): AmazonProgramTemplateRepository {
     if (!this.templates) throw new UserInputError('Program templates are not available in this runtime.');
     return this.templates;

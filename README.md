@@ -135,3 +135,22 @@ Keep the required Amazon Associate statement clearly associated with the server/
 `As an Amazon Associate I earn from qualifying purchases.`
 
 Do not tell users that using the link “supports the server” or otherwise encourage clicks as a way to support the operator. Amazon's current participation requirements prohibit incentives or support-style requests tied to affiliate-link usage. See `docs/API_FREE_SETUP.md` for the source links and rationale.
+
+
+## Queue Manager dashboard
+
+The recommended queue workflow is now the private dashboard:
+
+`/amazon queue manage`
+
+Main actions:
+- **Add Post** — opens a modal with Amazon URL, full Markdown post body and optional internal name.
+- **View Queue** — choose a pending item to preview, edit, remove or skip.
+- **Start / Pause** — control scheduled publishing.
+- **Queue Settings** — choose a configured Amazon channel and 12h/24h interval.
+- **Post Next** — publish the next pending item immediately.
+- **Refresh** — reload current queue state.
+
+Custom Markdown supports `{affiliate_link}`. The bot replaces it at preview/publish time using the current marketplace tracking ID. If the placeholder is omitted, the link is appended automatically. `#ad · Affiliate link` is added automatically. Mass mentions are neutralized.
+
+The older direct queue subcommands remain available as advanced/fallback controls for compatibility.

@@ -6,6 +6,7 @@ import { ConfigRepository } from '../repositories/ConfigRepository.js';
 import { DeliveryRepository } from '../repositories/DeliveryRepository.js';
 import { ProductLinkService } from './ProductLinkService.js';
 import { buildQuickProductPresentation, buildSmartAutoCopy } from './ProductUrlPresentation.js';
+import { AffiliateMarkdownRenderer } from './AffiliateMarkdownRenderer.js';
 
 const DISCLOSURE = '#ad · Affiliate link';
 const NO_MENTIONS = { parse: [] as never[], repliedUser: false };
@@ -14,6 +15,7 @@ export class AmazonQueueScheduler {
   private timer?: NodeJS.Timeout;
   private running = false;
   private links: ProductLinkService;
+  private markdown = new AffiliateMarkdownRenderer();
 
   constructor(
     private client: Client,
@@ -92,28 +94,34 @@ export class AmazonQueueScheduler {
     const presentation = buildQuickProductPresentation(item.url, item.title, item.body);
     const useEmbed = item.style === 'EMBED';
     const useNativePreview = item.style === 'AUTO';
-    const payload: any = useEmbed
+    const payload: any = item.style === 'MARKDOWN' && item.body
       ? {
-          content: result.affiliate ? DISCLOSURE : 'Amazon product link · No affiliate tag added.',
-          embeds: [{
-            title: presentation.title,
-            url: result.url,
-            description: presentation.description,
-            footer: { text: `ASIN ${result.asin} · No live product data fetched` },
-          }],
-          components: [{
-            type: 1,
-            components: [{ type: 2, style: 5, label: 'Open on Amazon', url: result.url }],
-          }],
-          allowedMentions: NO_MENTIONS,
-        }
-      : {
-          content: useNativePreview
-            ? buildSmartAutoCopy(presentation.title, result.url, result.affiliate)
-            : `${result.affiliate ? DISCLOSURE : 'Amazon product link · No affiliate tag added.'}\n${presentation.title !== `Amazon product ${result.asin}` ? `**${presentation.title}**\n` : ''}`,
+          content: this.markdown.render(item.body, result.url),
           components: [{ type: 1, components: [{ type: 2, style: 5, label: 'Open on Amazon', url: result.url }] }],
           allowedMentions: NO_MENTIONS,
-        };
+        }
+      : useEmbed
+        ? {
+            content: result.affiliate ? DISCLOSURE : 'Amazon product link · No affiliate tag added.',
+            embeds: [{
+              title: presentation.title,
+              url: result.url,
+              description: presentation.description,
+              footer: { text: `ASIN ${result.asin} · No live product data fetched` },
+            }],
+            components: [{
+              type: 1,
+              components: [{ type: 2, style: 5, label: 'Open on Amazon', url: result.url }],
+            }],
+            allowedMentions: NO_MENTIONS,
+          }
+        : {
+            content: useNativePreview
+              ? buildSmartAutoCopy(presentation.title, result.url, result.affiliate)
+              : `${result.affiliate ? DISCLOSURE : 'Amazon product link · No affiliate tag added.'}\n${presentation.title !== `Amazon product ${result.asin}` ? `**${presentation.title}**\n` : ''}`,
+            components: [{ type: 1, components: [{ type: 2, style: 5, label: 'Open on Amazon', url: result.url }] }],
+            allowedMentions: NO_MENTIONS,
+          };
 
     try {
       const message = await channel.send(payload);

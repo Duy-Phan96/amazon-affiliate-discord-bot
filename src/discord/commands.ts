@@ -15,6 +15,7 @@ export const amazonCommand = new SlashCommandBuilder()
       { name: 'Embed', value: 'EMBED' }
     )))
   .addSubcommandGroup(g => g.setName('queue').setDescription('Manage scheduled Amazon affiliate posts')
+    .addSubcommand(s => s.setName('manage').setDescription('Open the queue dashboard'))
     .addSubcommand(s => s.setName('add').setDescription('Add an Amazon product to the posting queue')
       .addStringOption(o => o.setName('url').setDescription('Full Amazon product URL').setRequired(true).setMaxLength(1500))
       .addStringOption(o => o.setName('title').setDescription('Optional title').setRequired(false).setMaxLength(120))

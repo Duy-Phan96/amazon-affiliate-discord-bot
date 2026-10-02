@@ -61,3 +61,21 @@ describe('Amazon post queue persistence', () => {
       expect(() => repo.update('g', item.id, { title:'Too late' })).toThrow(/Only pending/);
     } finally { db.close(); }
   });
+
+
+it('stores custom Markdown queue posts and allows URL edits while pending', () => {
+  const db = new AppDatabase(':memory:');
+  try {
+    const repo = new AmazonPostQueueRepository(db);
+    const item = repo.add('g','admin',{
+      url:'https://www.amazon.de/dp/B0ABCDEF12',
+      title:'Mouse post',
+      body:'**Gaming Mouse**\n\n👉 {affiliate_link}',
+      style:'MARKDOWN'
+    });
+    expect(item.style).toBe('MARKDOWN');
+    expect(item.body).toContain('{affiliate_link}');
+    const updated = repo.update('g', item.id, { url:'https://www.amazon.de/dp/B0ABCDEF13' });
+    expect(updated.url).toContain('B0ABCDEF13');
+  } finally { db.close(); }
+});

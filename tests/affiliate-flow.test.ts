@@ -163,3 +163,13 @@ describe('quick post native Amazon preview', () => {
     expect(payload.embeds).toBeUndefined();
   });
 });
+
+
+describe('queue manager command surface', () => {
+  it('registers /amazon queue manage as the primary queue dashboard entry point', () => {
+    const cmd = amazonCommand.toJSON();
+    const group = cmd.options?.find(o => o.name === 'queue') as any;
+    expect(group).toBeTruthy();
+    expect(group.options?.some((o:any) => o.name === 'manage')).toBe(true);
+  });
+});

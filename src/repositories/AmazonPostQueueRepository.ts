@@ -1,7 +1,7 @@
 import { AppDatabase } from '../persistence/Database.js';
 import { UserInputError } from '../services/SetupValidation.js';
 
-export type QueueItemStyle = 'AUTO' | 'BUTTON' | 'EMBED';
+export type QueueItemStyle = 'AUTO' | 'BUTTON' | 'EMBED' | 'MARKDOWN';
 export type QueueItemState = 'PENDING' | 'SENT' | 'SKIPPED' | 'UNKNOWN';
 
 export interface AmazonQueueRow {
@@ -76,6 +76,14 @@ export class AmazonPostQueueRepository {
     return this.getById(queue.id);
   }
 
+  updateSettings(guildId: string, createdBy: string, channelId: string | null, intervalHours: 12 | 24): AmazonQueueRow {
+    const queue = this.getOrCreate(guildId, createdBy);
+    this.database.db.prepare(
+      'UPDATE amazon_post_queues SET channel_id=?,interval_hours=?,updated_at=? WHERE id=?'
+    ).run(channelId, intervalHours, new Date().toISOString(), queue.id);
+    return this.getById(queue.id);
+  }
+
   scheduleNext(queueId: number, nextRunAt: number | null, enabled: boolean): void {
     this.database.db.prepare('UPDATE amazon_post_queues SET next_run_at=?,enabled=?,updated_at=? WHERE id=?')
       .run(nextRunAt, enabled ? 1 : 0, new Date().toISOString(), queueId);
@@ -122,16 +130,17 @@ export class AmazonPostQueueRepository {
   update(
     guildId: string,
     itemId: number,
-    input: { title?: string | null; body?: string | null; style?: QueueItemStyle },
+    input: { url?: string; title?: string | null; body?: string | null; style?: QueueItemStyle },
   ): AmazonQueueItemRow {
     const item = this.getItem(guildId, itemId);
     if (item.state !== 'PENDING') throw new UserInputError('Only pending queue items can be edited.');
+    const url = input.url === undefined ? item.url : input.url.trim();
     const title = input.title === undefined ? item.title : input.title?.trim() || null;
     const body = input.body === undefined ? item.body : input.body?.trim() || null;
     const style = input.style ?? item.style;
     this.database.db.prepare(
-      'UPDATE amazon_post_queue_items SET title=?,body=?,style=? WHERE id=?'
-    ).run(title, body, style, item.id);
+      'UPDATE amazon_post_queue_items SET url=?,title=?,body=?,style=? WHERE id=?'
+    ).run(url, title, body, style, item.id);
     return this.getItem(guildId, item.id);
   }
 
