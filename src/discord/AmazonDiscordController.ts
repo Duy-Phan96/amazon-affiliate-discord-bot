@@ -22,6 +22,7 @@ import { buildQuickProductPresentation, buildSmartAutoCopy, inferProductTitleFro
 import { AmazonPostQueueRepository, type QueueItemStyle } from '../repositories/AmazonPostQueueRepository.js';
 import { AmazonQueueScheduler } from '../services/AmazonQueueScheduler.js';
 import { AffiliateMarkdownRenderer } from '../services/AffiliateMarkdownRenderer.js';
+import { parseQueueImportJson } from '../services/QueueImportParser.js';
 
 type UI = ChatInputCommandInteraction | MessageComponentInteraction | ModalSubmitInteraction;
 type SetupData = { config: SetupConfig; revision: number; channelPage: number };
@@ -436,6 +437,47 @@ export class AmazonDiscordController {
     const queues = this.requireQueue();
 
     if (sub === 'manage') return this.queueDashboard(i);
+
+    if (sub === 'import') {
+      const attachment = i.options.getAttachment('file', true);
+      if (attachment.size > 256_000) throw new UserInputError('Queue JSON must be 256 KB or smaller.');
+      if (!attachment.name.toLowerCase().endsWith('.json')) throw new UserInputError('Upload a .json file.');
+      const response = await fetch(attachment.url);
+      if (!response.ok) throw new UserInputError('The JSON file could not be downloaded from Discord. Try uploading it again.');
+      const raw = await response.text();
+      const doc = parseQueueImportJson(raw);
+
+      for (const [index, post] of doc.posts.entries()) {
+        try {
+          this.links.generate(guildId, post.url);
+          this.affiliateMarkdown.validate(post.markdown);
+        } catch (error) {
+          if (error instanceof UserInputError) throw new UserInputError(`Post #${index + 1}: ${error.message}`);
+          throw error;
+        }
+      }
+
+      const imported = queues.addMany(guildId, i.user.id, doc.posts.map(post => ({
+        url: post.url,
+        title: post.name ?? null,
+        body: post.markdown,
+        style: 'MARKDOWN' as QueueItemStyle,
+      })));
+
+      if (doc.interval_hours) {
+        const current = queues.getOrCreate(guildId, i.user.id);
+        queues.updateSettings(guildId, i.user.id, current.channel_id, doc.interval_hours);
+      }
+
+      const queue = queues.get(guildId);
+      const rhythm = doc.interval_hours ?? queue?.interval_hours ?? 24;
+      const running = !!queue?.enabled;
+      const channel = queue?.channel_id ? `<#${queue.channel_id}>` : 'not configured yet';
+      return this.show(i,
+        `✅ **Queue import complete**\nImported: **${imported.length} posts**\nPending total: **${queues.pending(guildId).length}**\nInterval: **${rhythm}h**\nChannel: ${channel}\nStatus: **${running ? 'Running' : 'Paused'}**\n\n${running ? 'The imported posts will join the existing schedule automatically.' : 'Open /amazon queue manage, choose the channel if needed, and press Start when you are ready.'}`,
+        [buttons(button('amazon:queue:dashboard:back', 'Open Queue Manager', ButtonStyle.Primary))]
+      );
+    }
 
     if (sub === 'add') {
       const url = i.options.getString('url', true).trim();

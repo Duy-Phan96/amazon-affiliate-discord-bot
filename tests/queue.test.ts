@@ -79,3 +79,17 @@ it('stores custom Markdown queue posts and allows URL edits while pending', () =
     expect(updated.url).toContain('B0ABCDEF13');
   } finally { db.close(); }
 });
+
+
+it('imports multiple pending queue posts atomically through addMany', () => {
+  const db = new AppDatabase(':memory:');
+  try {
+    const repo = new AmazonPostQueueRepository(db);
+    const rows = repo.addMany('g','admin',[
+      {url:'https://www.amazon.de/dp/B0ABCDEF12',body:'**One** {affiliate_link}',style:'MARKDOWN'},
+      {url:'https://www.amazon.de/dp/B0ABCDEF13',body:'**Two** {affiliate_link}',style:'MARKDOWN'}
+    ]);
+    expect(rows).toHaveLength(2);
+    expect(repo.pending('g')).toHaveLength(2);
+  } finally { db.close(); }
+});

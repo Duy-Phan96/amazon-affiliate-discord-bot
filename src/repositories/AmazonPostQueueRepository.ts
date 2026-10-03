@@ -101,6 +101,12 @@ export class AmazonPostQueueRepository {
     return this.getItem(guildId, Number(result.lastInsertRowid));
   }
 
+  addMany(guildId: string, createdBy: string, inputs: { url: string; title?: string | null; body?: string | null; style?: QueueItemStyle }[]): AmazonQueueItemRow[] {
+    const existing = this.pending(guildId).length;
+    if (existing + inputs.length > 50) throw new UserInputError(`Import would exceed the 50-post queue limit. Current pending: ${existing}.`);
+    return this.database.db.transaction(() => inputs.map(input => this.add(guildId, createdBy, input)))();
+  }
+
   list(guildId: string): AmazonQueueItemRow[] {
     const queue = this.get(guildId);
     if (!queue) return [];

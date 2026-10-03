@@ -13,7 +13,9 @@ export const amazonCommand = new SlashCommandBuilder()
       { name: 'Embed', value: 'EMBED' }
     )))
   .addSubcommandGroup(g => g.setName('queue').setDescription('Scheduled Amazon posts')
-    .addSubcommand(s => s.setName('manage').setDescription('Open the queue dashboard')))
+    .addSubcommand(s => s.setName('manage').setDescription('Open the queue dashboard'))
+    .addSubcommand(s => s.setName('import').setDescription('Import multiple Markdown posts from a JSON file')
+      .addAttachmentOption(o => o.setName('file').setDescription('JSON queue file').setRequired(true))))
   .addSubcommand(s => s.setName('programs').setDescription('Create and manage Amazon program posts'))
   .addSubcommand(s => s.setName('settings').setDescription('Tracking IDs, primary marketplace and bot settings'))
   .addSubcommand(s => s.setName('setup').setDescription('First-time Amazon bot setup'));

@@ -35,7 +35,7 @@ describe('private affiliate link command', () => {
     const names = cmd.options?.map(o => o.name) ?? [];
     expect(names).toEqual(['post','queue','programs','settings','setup']);
     const queue = cmd.options?.find(o => o.name === 'queue') as any;
-    expect(queue.options?.map((o:any) => o.name)).toEqual(['manage']);
+    expect(queue.options?.map((o:any) => o.name)).toEqual(['manage','import']);
   });
   it('generates disclosed affiliate link privately from DB configuration', async () => {
     const { controller, deliveries } = fixture(); const i = interaction(); await controller.handle(i);
