@@ -55,52 +55,27 @@ describe('API-free configuration and deliveries', () => {
 });
 
 
-describe('primary marketplace links', () => {
-  it('defaults to the marketplace from the pasted URL', () => {
+describe('source marketplace links', () => {
+  it('always keeps the marketplace from the pasted product URL', () => {
     const db = new AppDatabase(':memory:');
     try {
       const repo = new ConfigRepository(db);
       repo.saveSetup('g', {
         productMode:'AFFILIATE',
-        marketplaces:['DE','US'],
-        tags:{DE:'gamer-de-21',US:'gamer-us-20'},
+        marketplaces:['DE','US','UK'],
+        tags:{DE:'gamer-de-21',US:'gamer-us-20',UK:'gamer-uk-21'},
         oneLinkDeclared:true,
         channels:[a],
         linkMode:'BUTTON'
       }, 0);
-      const result = new ProductLinkService(repo).generate('g','https://www.amazon.de/dp/B0ABCDEF12');
-      expect(result.url).toBe('https://www.amazon.de/dp/B0ABCDEF12?tag=gamer-de-21');
-      expect(repo.getGuild('g').primary_marketplace).toBe('SOURCE');
-    } finally { db.close(); }
-  });
 
-  it('can use Amazon.com and the saved US tracking ID as the primary outbound marketplace', () => {
-    const db = new AppDatabase(':memory:');
-    try {
-      const repo = new ConfigRepository(db);
-      repo.saveSetup('g', {
-        productMode:'AFFILIATE',
-        marketplaces:['DE','US'],
-        tags:{DE:'gamer-de-21',US:'gamer-us-20'},
-        oneLinkDeclared:true,
-        channels:[a],
-        linkMode:'BUTTON'
-      }, 0);
-      repo.setPrimaryMarketplace('g','US');
-      const result = new ProductLinkService(repo).generate('g','https://www.amazon.de/dp/B0ABCDEF12');
-      expect(result.sourceMarketplace).toBe('DE');
-      expect(result.marketplace).toBe('US');
-      expect(result.marketplaceOverridden).toBe(true);
-      expect(result.url).toBe('https://www.amazon.com/dp/B0ABCDEF12?tag=gamer-us-20');
-    } finally { db.close(); }
-  });
+      const de = new ProductLinkService(repo).generate('g','https://www.amazon.de/dp/B0ABCDEF12');
+      const us = new ProductLinkService(repo).generate('g','https://www.amazon.com/dp/B0ABCDEF12');
+      const uk = new ProductLinkService(repo).generate('g','https://www.amazon.co.uk/dp/B0ABCDEF12');
 
-  it('does not allow a disabled marketplace to become primary', () => {
-    const db = new AppDatabase(':memory:');
-    try {
-      const repo = new ConfigRepository(db);
-      repo.saveSetup('g', config(), 0);
-      expect(() => repo.setPrimaryMarketplace('g','US')).toThrow(/Enable this marketplace/);
+      expect(de.url).toBe('https://www.amazon.de/dp/B0ABCDEF12?tag=gamer-de-21');
+      expect(us.url).toBe('https://www.amazon.com/dp/B0ABCDEF12?tag=gamer-us-20');
+      expect(uk.url).toBe('https://www.amazon.co.uk/dp/B0ABCDEF12?tag=gamer-uk-21');
     } finally { db.close(); }
   });
 });

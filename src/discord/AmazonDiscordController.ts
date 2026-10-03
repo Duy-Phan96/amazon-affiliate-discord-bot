@@ -86,7 +86,6 @@ export class AmazonDiscordController {
       else if (kind === 'templateedit') await this.templateEditAction(i, id, action);
       else if (kind === 'queue') await this.queueAction(i, id, action);
       else if (kind === 'queuedraft') await this.queueDraftAction(i, id, action);
-      else if (kind === 'settings') await this.settingsAction(i, id, action);
       else throw new UserInputError('This is an old control. Start the relevant /amazon command again.');
     } catch (error) {
       const content = error instanceof UserInputError ? error.message : 'The action could not be completed. Check the bot permissions and start the command again.';
@@ -150,7 +149,7 @@ export class AmazonDiscordController {
         this.deliveries.unknown(guildId, eventId);
         throw new UserInputError('Delivery could not be confirmed. Check this channel before retrying; the bot will not automatically resend.');
       }
-      return this.show(i, `Affiliate post published in <#${channel.id}>.`);
+      return this.show(i, `Affiliate post published in <#${channel.id}>. The Amazon link stayed on its original marketplace; the bot-generated post copy remains English.`);
     }
     if (sub === 'setup') {
       const current = this.repo.getGuild(guildId);
@@ -184,29 +183,11 @@ export class AmazonDiscordController {
   private async settingsView(i: UI) {
     const g = this.repo.getGuild(i.guildId!);
     const markets = this.repo.listMarketplaces(i.guildId!).filter(m => m.enabled);
-    const enabled = new Set(markets.map(m => m.marketplace));
-    const current = g.primary_marketplace;
-    const primaryLabel = current === 'SOURCE' ? 'Source marketplace' : LABELS[current];
-    const selector = buttons(
-      button('amazon:settings:primary:SOURCE', 'Source', current === 'SOURCE' ? ButtonStyle.Primary : ButtonStyle.Secondary),
-      button('amazon:settings:primary:DE', 'DE', current === 'DE' ? ButtonStyle.Primary : ButtonStyle.Secondary).setDisabled(!enabled.has('DE')),
-      button('amazon:settings:primary:US', 'US (.com)', current === 'US' ? ButtonStyle.Primary : ButtonStyle.Secondary).setDisabled(!enabled.has('US')),
-      button('amazon:settings:primary:UK', 'UK (.co.uk)', current === 'UK' ? ButtonStyle.Primary : ButtonStyle.Secondary).setDisabled(!enabled.has('UK')),
-    );
-    const warning = current === 'SOURCE'
-      ? 'Links stay on the marketplace you pasted.'
-      : 'Cross-marketplace mode reuses the ASIN on the selected Amazon store. Verify the listing: an ASIN may be unavailable or different on another marketplace. OneLink redirection is handled by Amazon and is not guaranteed by this bot.';
+    const channels = this.repo.listLinkChannels(i.guildId!);
     return this.show(i,
-      `**Amazon Settings**\n\n**Primary Marketplace / Tracking ID**\nCurrent: **${primaryLabel}**\n${warning}\n\nEnabled IDs:\n${markets.map(m => `• ${LABELS[m.marketplace]} — ${m.affiliate_tag}`).join('\n') || '_No affiliate IDs configured._'}\n\nThis setting affects newly generated product and queue links. Existing queued source URLs are kept; the affiliate link is resolved when previewed or published.`,
-      [selector, buttons(link(ONE_LINK, 'OneLink guide'))],
+      `**Amazon Settings**\nMode: **${g.product_mode}**\nLink behavior: **${g.link_mode}**\n\n**Marketplace rule**\nProduct links always stay on their original Amazon marketplace. A .de link stays .de, .com stays .com and .co.uk stays .co.uk. This avoids broken cross-marketplace ASIN links.\n\n**Tracking IDs**\n${markets.map(m => `• ${LABELS[m.marketplace]} — ${m.affiliate_tag}`).join('\n') || '_No affiliate IDs configured._'}\n\n**Configured channels**\n${channels.map(row => `• <#${row.channel_id}>`).join('\n') || '_No channels configured._'}\n\nPublic post text is written in English by the bot/templates. Discord's native Amazon preview may still follow the language of the source marketplace.`,
+      [buttons(link(ONE_LINK, 'OneLink guide'), link(DISCLOSURE_GUIDE, 'Disclosure guide'))],
     );
-  }
-
-  private async settingsAction(i: MessageComponentInteraction | ModalSubmitInteraction, id: string, action: string) {
-    if (id !== 'primary' || !i.isButton()) throw new UserInputError('This settings control is no longer current.');
-    if (!['SOURCE','DE','US','UK'].includes(action)) throw new UserInputError('Unknown marketplace setting.');
-    this.repo.setPrimaryMarketplace(i.guildId!, action === 'SOURCE' ? null : action as MarketplaceCode);
-    return this.settingsView(i);
   }
 
   private async getChannelPage(guildId: string, requestedPage: number, allowedIds?: string[]): Promise<ChannelChoicePage> {
@@ -253,7 +234,7 @@ export class AmazonDiscordController {
       content = '**Step 1 / 6 — What do you need?**\nAffiliate: turn product URLs into your own affiliate links. No product API is needed.\nBasic: share products without tracking or an Associates account.\nNothing changes until you review and save.';
       rows.push(new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(new StringSelectMenuBuilder().setCustomId(key('mode')).setPlaceholder('Choose Affiliate or Basic').addOptions({ label: 'Affiliate — my tracking IDs', value: 'AFFILIATE' }, { label: 'Basic — no partner account', value: 'BASIC' })));
     } else if (draft.step === 'marketplaces') {
-      content = '**Step 2 / 6 — Choose marketplaces**\nOnly select stores for which you have a real tracking ID. This release supports DE, US and UK. You can later choose a Primary Marketplace in /amazon settings; Source remains the safest default.';
+      content = '**Step 2 / 6 — Choose marketplaces**\nOnly select stores for which you have a real tracking ID. This release supports DE, US and UK. Product links always stay on their original marketplace.';
       rows.push(new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(new StringSelectMenuBuilder().setCustomId(key('marketplaces')).setPlaceholder('Select marketplaces').setMinValues(1).setMaxValues(3).addOptions(...Object.keys(MARKETPLACES).map(code => ({ label: LABELS[code as MarketplaceCode], value: code, default: c.marketplaces.includes(code as MarketplaceCode) })))));
     } else if (draft.step === 'tags') {
       content = '**Step 2 / 6 — Your tracking IDs**\nEnter the actual ID for each chosen store. Never change an ID suffix to invent a foreign ID. Do not enter API credentials.';
@@ -610,7 +591,7 @@ export class AmazonDiscordController {
       button('amazon:queue:dashboard:refresh', '🔄 Refresh'),
     );
     return this.show(i,
-      `**Amazon Queue Manager**\nStatus: **${status}**\nPrimary marketplace: **${this.repo.getGuild(i.guildId!).primary_marketplace === 'SOURCE' ? 'Source' : LABELS[this.repo.getGuild(i.guildId!).primary_marketplace as MarketplaceCode]}**\nChannel: ${channel}\nInterval: **${queue?.interval_hours ?? 24}h**\nPending posts: **${pending.length}**\nNext automatic post: ${next}\n\nUse **Add Post** for a clean Markdown editor. The bot replaces {affiliate_link} when publishing and adds the affiliate disclosure automatically.`,
+      `**Amazon Queue Manager**\nStatus: **${status}**\nMarketplace: **Original source link**\nChannel: ${channel}\nInterval: **${queue?.interval_hours ?? 24}h**\nPending posts: **${pending.length}**\nNext automatic post: ${next}\n\nUse **Add Post** for a clean Markdown editor. The bot replaces {affiliate_link} when publishing and adds the affiliate disclosure automatically.`,
       [primary, secondary],
     );
   }
