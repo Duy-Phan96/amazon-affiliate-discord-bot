@@ -197,7 +197,7 @@ export class AmazonDiscordController {
       : 'Cross-marketplace mode reuses the ASIN on the selected Amazon store. Verify the listing: an ASIN may be unavailable or different on another marketplace. OneLink redirection is handled by Amazon and is not guaranteed by this bot.';
     return this.show(i,
       `**Amazon Settings**\n\n**Primary Marketplace / Tracking ID**\nCurrent: **${primaryLabel}**\n${warning}\n\nEnabled IDs:\n${markets.map(m => `• ${LABELS[m.marketplace]} — ${m.affiliate_tag}`).join('\n') || '_No affiliate IDs configured._'}\n\nThis setting affects newly generated product and queue links. Existing queued source URLs are kept; the affiliate link is resolved when previewed or published.`,
-      [selector, buttons(button('amazon:settings:primary:SOURCE', 'Reset to Source'), link(ONE_LINK, 'OneLink guide'))],
+      [selector, buttons(link(ONE_LINK, 'OneLink guide'))],
     );
   }
 
