@@ -466,7 +466,8 @@ export class AmazonDiscordController {
 
       if (doc.interval_hours) {
         const current = queues.getOrCreate(guildId, i.user.id);
-        queues.updateSettings(guildId, i.user.id, current.channel_id, doc.interval_hours);
+        const updated = queues.updateSettings(guildId, i.user.id, current.channel_id, doc.interval_hours);
+        if (updated.enabled) queues.scheduleNext(updated.id, Date.now() + doc.interval_hours * 60 * 60 * 1000, true);
       }
 
       const queue = queues.get(guildId);
@@ -498,7 +499,7 @@ export class AmazonDiscordController {
       if (![12, 24].includes(interval)) throw new UserInputError('Choose a 12h or 24h interval.');
       if (!this.repo.isLinkChannel(guildId, channel.id)) throw new UserInputError('That channel is not configured for Amazon. Add it in /amazon setup first.');
       await this.targetChannel(guildId, channel.id, i.user.id);
-      const queue = queues.configure(guildId, i.user.id, channel.id, interval as 12 | 24, Date.now() + interval * 60 * 60 * 1000);
+      const queue = queues.configure(guildId, i.user.id, channel.id, interval, Date.now() + interval * 60 * 60 * 1000);
       const pending = queues.pending(guildId).length;
       return this.show(i, `**Amazon queue started**\nChannel: <#${channel.id}>\nInterval: every **${queue.interval_hours} hours**\nPending: **${pending}**\nNext automatic post: <t:${Math.floor((queue.next_run_at ?? Date.now()) / 1000)}:R>\n\nUse "/amazon queue next" if you want the first queued item posted immediately.`);
     }
@@ -723,13 +724,18 @@ export class AmazonDiscordController {
       ));
     }
     rows.push(buttons(
+      button('amazon:queue:settings:3', 'Every 3h', queue.interval_hours === 3 ? ButtonStyle.Primary : ButtonStyle.Secondary),
+      button('amazon:queue:settings:6', 'Every 6h', queue.interval_hours === 6 ? ButtonStyle.Primary : ButtonStyle.Secondary),
       button('amazon:queue:settings:12', 'Every 12h', queue.interval_hours === 12 ? ButtonStyle.Primary : ButtonStyle.Secondary),
       button('amazon:queue:settings:24', 'Every 24h', queue.interval_hours === 24 ? ButtonStyle.Primary : ButtonStyle.Secondary),
-      button('amazon:queue:settings:current', 'Use this channel'),
     ));
-    rows.push(buttons(button('amazon:queue:dashboard:back', 'Back')));
+    rows.push(buttons(
+      button('amazon:queue:settings:custom', 'Custom Interval', ButtonStyle.Primary),
+      button('amazon:queue:settings:current', 'Use this channel'),
+      button('amazon:queue:dashboard:back', 'Back'),
+    ));
     return this.show(i,
-      `**Queue Settings**\nChannel: ${queue.channel_id ? `<#${queue.channel_id}>` : 'Not configured'}\nInterval: **${queue.interval_hours}h**\n\nChoose where and how often queued posts should be published.`,
+      `**Queue Settings**\nChannel: ${queue.channel_id ? `<#${queue.channel_id}>` : 'Not configured'}\nInterval: **${queue.interval_hours}h**\n\nChoose a quick interval or set any whole number from **1–168 hours**.`,
       rows,
     );
   }
@@ -773,17 +779,40 @@ export class AmazonDiscordController {
         const channelId = i.values[0];
         if (!this.repo.isLinkChannel(i.guildId!, channelId)) throw new UserInputError('That channel is not configured for Amazon.');
         await this.targetChannel(i.guildId!, channelId, i.user.id);
-        queues.updateSettings(i.guildId!, i.user.id, channelId, current.interval_hours as 12 | 24);
+        queues.updateSettings(i.guildId!, i.user.id, channelId, current.interval_hours);
         return this.queueSettingsView(i);
       }
-      if ((action === '12' || action === '24') && i.isButton()) {
-        queues.updateSettings(i.guildId!, i.user.id, current.channel_id, Number(action) as 12 | 24);
+      if (['3','6','12','24'].includes(action) && i.isButton()) {
+        const hours = Number(action);
+        const updated = queues.updateSettings(i.guildId!, i.user.id, current.channel_id, hours);
+        if (updated.enabled) queues.scheduleNext(updated.id, Date.now() + hours * 60 * 60 * 1000, true);
+        return this.queueSettingsView(i);
+      }
+      if (action === 'custom' && i.isButton()) {
+        const input = new TextInputBuilder()
+          .setCustomId('hours')
+          .setLabel('Interval in hours (1–168)')
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true)
+          .setMaxLength(3)
+          .setValue(String(current.interval_hours));
+        return i.showModal(new ModalBuilder()
+          .setCustomId('amazon:queue:settings:custom')
+          .setTitle('Custom Queue Interval')
+          .addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(input)));
+      }
+      if (action === 'custom' && i.isModalSubmit()) {
+        const raw = i.fields.getTextInputValue('hours').trim();
+        const hours = Number(raw);
+        if (!Number.isInteger(hours) || hours < 1 || hours > 168) throw new UserInputError('Enter a whole number from 1 to 168 hours.');
+        const updated = queues.updateSettings(i.guildId!, i.user.id, current.channel_id, hours);
+        if (updated.enabled) queues.scheduleNext(updated.id, Date.now() + hours * 60 * 60 * 1000, true);
         return this.queueSettingsView(i);
       }
       if (action === 'current' && i.isButton()) {
         if (!i.channelId || !this.repo.isLinkChannel(i.guildId!, i.channelId)) throw new UserInputError('This channel is not configured for Amazon.');
         await this.targetChannel(i.guildId!, i.channelId, i.user.id);
-        queues.updateSettings(i.guildId!, i.user.id, i.channelId, current.interval_hours as 12 | 24);
+        queues.updateSettings(i.guildId!, i.user.id, i.channelId, current.interval_hours);
         return this.queueSettingsView(i);
       }
     }

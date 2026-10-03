@@ -15,12 +15,12 @@ describe('Amazon post queue persistence', () => {
     } finally { db.close(); }
   });
 
-  it('supports 12h/24h configuration and restart-safe next_run_at', () => {
+  it('supports custom hourly configuration and restart-safe next_run_at', () => {
     const db = new AppDatabase(':memory:');
     try {
       const repo = new AmazonPostQueueRepository(db);
-      const q = repo.configure('g','admin','123456789012345678',12,123456789);
-      expect(q.interval_hours).toBe(12);
+      const q = repo.configure('g','admin','123456789012345678',3,123456789);
+      expect(q.interval_hours).toBe(3);
       expect(q.next_run_at).toBe(123456789);
       expect(repo.get('g')?.enabled).toBe(1);
     } finally { db.close(); }
@@ -91,5 +91,19 @@ it('imports multiple pending queue posts atomically through addMany', () => {
     ]);
     expect(rows).toHaveLength(2);
     expect(repo.pending('g')).toHaveLength(2);
+  } finally { db.close(); }
+});
+
+
+it('accepts custom whole-hour intervals from 1 to 168 and rejects invalid values', () => {
+  const db = new AppDatabase(':memory:');
+  try {
+    const repo = new AmazonPostQueueRepository(db);
+    expect(repo.updateSettings('g','admin',null,1).interval_hours).toBe(1);
+    expect(repo.updateSettings('g','admin',null,3).interval_hours).toBe(3);
+    expect(repo.updateSettings('g','admin',null,168).interval_hours).toBe(168);
+    expect(() => repo.updateSettings('g','admin',null,0)).toThrow(/1 to 168/);
+    expect(() => repo.updateSettings('g','admin',null,2.5)).toThrow(/whole number/);
+    expect(() => repo.updateSettings('g','admin',null,169)).toThrow(/1 to 168/);
   } finally { db.close(); }
 });

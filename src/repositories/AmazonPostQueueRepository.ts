@@ -52,7 +52,8 @@ export class AmazonPostQueueRepository {
     return row;
   }
 
-  configure(guildId: string, createdBy: string, channelId: string, intervalHours: 12 | 24, startAt: number): AmazonQueueRow {
+  configure(guildId: string, createdBy: string, channelId: string, intervalHours: number, startAt: number): AmazonQueueRow {
+    this.validateInterval(intervalHours);
     const queue = this.getOrCreate(guildId, createdBy);
     this.database.db.prepare(
       'UPDATE amazon_post_queues SET channel_id=?,interval_hours=?,enabled=1,next_run_at=?,updated_at=? WHERE id=?'
@@ -76,12 +77,19 @@ export class AmazonPostQueueRepository {
     return this.getById(queue.id);
   }
 
-  updateSettings(guildId: string, createdBy: string, channelId: string | null, intervalHours: 12 | 24): AmazonQueueRow {
+  updateSettings(guildId: string, createdBy: string, channelId: string | null, intervalHours: number): AmazonQueueRow {
+    this.validateInterval(intervalHours);
     const queue = this.getOrCreate(guildId, createdBy);
     this.database.db.prepare(
       'UPDATE amazon_post_queues SET channel_id=?,interval_hours=?,updated_at=? WHERE id=?'
     ).run(channelId, intervalHours, new Date().toISOString(), queue.id);
     return this.getById(queue.id);
+  }
+
+  private validateInterval(intervalHours: number): void {
+    if (!Number.isInteger(intervalHours) || intervalHours < 1 || intervalHours > 168) {
+      throw new UserInputError('Queue interval must be a whole number from 1 to 168 hours.');
+    }
   }
 
   scheduleNext(queueId: number, nextRunAt: number | null, enabled: boolean): void {

@@ -7,7 +7,7 @@ export interface QueueImportPost {
 }
 export interface QueueImportDocument {
   version: 1;
-  interval_hours?: 12 | 24;
+  interval_hours?: number;
   posts: QueueImportPost[];
 }
 
@@ -19,8 +19,8 @@ export function parseQueueImportJson(raw: string): QueueImportDocument {
   if (obj.version !== undefined && obj.version !== 1) throw new UserInputError('Unsupported queue JSON version. Use version 1.');
   if (!Array.isArray(obj.posts) || obj.posts.length < 1) throw new UserInputError('JSON must contain at least one post.');
   if (obj.posts.length > 50) throw new UserInputError('A single import can contain at most 50 posts.');
-  if (obj.interval_hours !== undefined && obj.interval_hours !== 12 && obj.interval_hours !== 24) {
-    throw new UserInputError('interval_hours must be 12 or 24.');
+  if (obj.interval_hours !== undefined && (!Number.isInteger(obj.interval_hours) || Number(obj.interval_hours) < 1 || Number(obj.interval_hours) > 168)) {
+    throw new UserInputError('interval_hours must be a whole number from 1 to 168.');
   }
   const posts = obj.posts.map((entry, index) => {
     if (!entry || typeof entry !== 'object' || Array.isArray(entry)) throw new UserInputError(`Post #${index + 1} is invalid.`);
@@ -33,5 +33,5 @@ export function parseQueueImportJson(raw: string): QueueImportDocument {
     if (name && name.length > 80) throw new UserInputError(`Post #${index + 1} name is too long.`);
     return { url, markdown, ...(name ? { name } : {}) };
   });
-  return { version: 1, ...(obj.interval_hours ? { interval_hours: obj.interval_hours as 12 | 24 } : {}), posts };
+  return { version: 1, ...(obj.interval_hours ? { interval_hours: Number(obj.interval_hours) } : {}), posts };
 }
