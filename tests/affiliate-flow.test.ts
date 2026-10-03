@@ -30,10 +30,12 @@ function message(content = PRODUCT) {
     reply: vi.fn(async () => ({ id: '777777777777777777' })) };
 }
 describe('private affiliate link command', () => {
-  it('registered with one required URL and no title or Amazon API inputs', () => {
+  it('keeps the public slash-command surface focused on the main workflows', () => {
     const cmd = amazonCommand.toJSON();
-    const sub = cmd.options?.find(o => o.name === 'link') as any;
-    expect(sub.options).toHaveLength(1); expect(sub.options[0].name).toBe('url'); expect(sub.options[0].required).toBe(true);
+    const names = cmd.options?.map(o => o.name) ?? [];
+    expect(names).toEqual(['post','queue','programs','settings','setup']);
+    const queue = cmd.options?.find(o => o.name === 'queue') as any;
+    expect(queue.options?.map((o:any) => o.name)).toEqual(['manage']);
   });
   it('generates disclosed affiliate link privately from DB configuration', async () => {
     const { controller, deliveries } = fixture(); const i = interaction(); await controller.handle(i);

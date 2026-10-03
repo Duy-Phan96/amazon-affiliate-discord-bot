@@ -31,7 +31,8 @@ describe('smart auto product copy', () => {
   it('builds a neutral English auto layout without inventing deal facts', () => {
     const text = buildSmartAutoCopy('Logitech G305 Gaming Mouse', 'https://www.amazon.de/dp/B0ABCDEF12?tag=test-21', true);
     expect(text).toContain('🖱️ **Logitech G305 Gaming Mouse**');
-    expect(text).toContain('Check current price & availability on Amazon.');
+    expect(text).toContain('Check the current price');
+    expect(text).toContain('👉 **View on Amazon:**');
     expect(text).toContain('#ad · Affiliate link');
     expect(text).toContain('?tag=test-21');
     expect(text.toLowerCase()).not.toContain('discount');
