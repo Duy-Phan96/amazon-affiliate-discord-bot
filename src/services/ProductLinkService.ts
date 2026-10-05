@@ -1,6 +1,5 @@
 import type { MarketplaceCode } from '../domain/amazon.js';
 import type { ProductMode } from '../domain/config.js';
-import { AmazonAffiliateService } from './AmazonAffiliateService.js';
 import { AmazonUrlParser } from './AmazonUrlParser.js';
 import { UserInputError } from './SetupValidation.js';
 export interface ProductLinkConfig {
@@ -19,9 +18,9 @@ export class ProductLinkService {
     if (affiliate) {
       const tag = this.config.getTag(guildId, parsed.marketplace);
       if (!tag) throw new UserInputError('This marketplace has no tracking ID. Configure its real ID; OneLink does not invent one.');
-      url = new AmazonAffiliateService(this.config, this.parser).generate(guildId, input).affiliateUrl;
+      const target = new URL(parsed.canonicalUrl);
+      target.searchParams.set('tag', tag);
+      url = target.toString();
     }
-    // Basic uses a clean canonical URL, even if the original link had another tag.
     return { ...parsed, url, affiliate };
-  }
-}
+  }}

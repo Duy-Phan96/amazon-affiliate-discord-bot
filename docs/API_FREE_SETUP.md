@@ -59,3 +59,86 @@ Ein abgelaufener Dialog wird neu gestartet. Bei währenddessen geänderten Einst
 Bei unklarer Zustellung zuerst den Zielkanal ansehen. Der Bot sendet denselben reservierten Versuch nicht automatisch erneut; `/amazon status` zählt ungeklärte Versuche. Dadurch können Duplikate vermieden werden, eine garantiert genau einmal erfolgte Zustellung lässt sich daraus aber nicht ableiten.
 
 Fehlender Creators-API-Zugriff ist in dieser Version **kein Fehler** und blockiert keinen dieser Schritte.
+
+
+## 9. Amazon Programme wie Visa, Prime und Prime Student
+
+Zusätzlich zu normalen Produktlinks unterstützt der nächste API-freie Feature-Slice eigene Amazon-Programme.
+
+Diese Programme funktionieren technisch anders als Produktlinks:
+
+- **Produktlink:** Ein konkreter Amazon-Produktlink wird mit deiner passenden Tracking-ID versehen.
+- **Amazon-Programm:** Der Bot verwendet eine von Amazon vorgegebene Landingpage und ergänzt deine aktuell gespeicherte Marketplace-Tracking-ID.
+
+Initial unterstützt werden für Amazon.de:
+- Amazon Visa
+- Amazon Prime
+- Prime Student
+
+Dafür ist **keine Creators API** erforderlich.
+
+Als Administrator öffnest du später:
+
+`/amazon programs`
+
+Dort kannst du ein Programm auswählen, den erzeugten Affiliate-Link privat ansehen oder einen eigenen Discord-Post erstellen.
+
+Der Text kann Platzhalter enthalten:
+
+`{program_name}`
+`{affiliate_link}`
+
+Beispiel:
+
+```
+💳 **{program_name}**
+
+Mehr Infos:
+👉 {affiliate_link}
+
+#Anzeige
+```
+
+Vor einer Veröffentlichung erscheint eine private Vorschau. Ein Post wird erst nach ausdrücklicher Bestätigung öffentlich gesendet.
+
+Vorlagen können gespeichert, bearbeitet, deaktiviert und gelöscht werden. Der fertige Affiliate-Link wird nicht dauerhaft in der Vorlage gespeichert. Beim späteren Verwenden wird er erneut aus der **aktuell gespeicherten Tracking-ID** erzeugt.
+
+Provisionen/Bounties und Aktionsbedingungen werden absichtlich nicht als feste Werte im Bot gespeichert, weil Amazon sie ändern kann. Prüfe dafür immer die im Bot verlinkte aktuelle PartnerNet-Seite.
+
+OneLink ist für diese Programmlinks nicht erforderlich und bleibt eine optionale Amazon-seitige Information.
+
+Automatisches zeitgesteuertes Posten (z. B. „Amazon Visa alle 4 Tage“) ist der **darauffolgende** Feature-Slice und wird erst nach dem Live-Test der manuellen Programmposts umgesetzt.
+
+
+## 10. English-only disclosure standard for the current server
+
+The current GamerHQ test server is English-only. The bot should therefore keep public affiliate-post copy in English for now. Multi-language support is a later feature.
+
+For each individual affiliate post, keep the disclosure short and close to the link/button:
+
+```
+#ad · Affiliate link
+```
+
+Amazon's PartnerNet guidance says the link disclosure should be clear and conspicuous near the affiliate link; Amazon gives examples such as `#ad` or a paid-link disclosure.
+
+Separately, place the required Amazon Associate statement clearly in the server/channel/account context, for example in the Amazon channel topic, a pinned information message, or another clearly associated disclosure location:
+
+```
+As an Amazon Associate I earn from qualifying purchases.
+```
+
+Do **not** use wording such as:
+
+```
+Using this link supports the server.
+```
+
+or similar requests to support the server/company through the affiliate link. Amazon's participation requirements prohibit incentives or requests framed around supporting you, your company, charities, or other organizations through use of the affiliate links.
+
+Official sources:
+- Amazon disclosure guidance: https://partnernet.amazon.de/help/node/topic/GHQNZAU6669EZS98
+- Amazon participation requirements: https://partnernet.amazon.de/help/operating/participation
+- Amazon Associates agreement: https://partnernet.amazon.de/help/operating/agreement/
+
+This documentation does not claim legal approval for Discord as a placement; the operator must still ensure the actual registered site/account usage is accepted by Amazon.

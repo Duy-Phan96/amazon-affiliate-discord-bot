@@ -13,14 +13,26 @@ import { DraftStore, type Draft } from '../services/DraftStore.js';
 import { ProductLinkService } from '../services/ProductLinkService.js';
 import { hasAffiliateTag } from '../services/MessageLinkPolicy.js';
 import { UserInputError, validateSetup } from '../services/SetupValidation.js';
+import { listAmazonPrograms, getAmazonProgram, type AmazonProgramKey } from '../programs/AmazonProgramCatalog.js';
+import { AmazonProgramLinkService } from '../services/AmazonProgramLinkService.js';
+import { ProgramTemplateRenderer } from '../services/ProgramTemplateRenderer.js';
+import { AmazonProgramTemplateRepository, type AmazonProgramTemplateRow } from '../repositories/AmazonProgramTemplateRepository.js';
+import { paginateChannelChoices, type ChannelChoicePage } from '../services/ChannelPagination.js';
+import { buildQuickProductPresentation, buildSmartAutoCopy, inferProductTitleFromAmazonUrl } from '../services/ProductUrlPresentation.js';
+import { AmazonPostQueueRepository, type QueueItemStyle } from '../repositories/AmazonPostQueueRepository.js';
+import { AmazonQueueScheduler } from '../services/AmazonQueueScheduler.js';
+import { AffiliateMarkdownRenderer } from '../services/AffiliateMarkdownRenderer.js';
+import { parseQueueImportJson } from '../services/QueueImportParser.js';
 
 type UI = ChatInputCommandInteraction | MessageComponentInteraction | ModalSubmitInteraction;
-type SetupData = { config: SetupConfig; revision: number };
+type SetupData = { config: SetupConfig; revision: number; channelPage: number };
 type ProductData = { url: string; title: string; note: string; channel?: string; revision: number };
+type ProgramPostData = { programKey: AmazonProgramKey; body: string; templateName: string; channel?: string; revision: number; templateId?: number; channelPage: number };
+type QueueDraftData = { url: string; name: string; body: string; itemId?: number };
 const LABELS = { DE: 'Amazon.de', US: 'Amazon.com', UK: 'Amazon.co.uk' };
 const ONE_LINK = 'https://affiliate-program.amazon.com/help/node/topic/GKHRXG4YEJBTCAFC';
 const DISCLOSURE_GUIDE = 'https://partnernet.amazon.de/help/node/topic/GHQNZAU6669EZS98';
-const DISCLOSURE = 'Anzeige / Ad · Affiliate link\nAs an Amazon Associate I earn from qualifying purchases.\nAls Amazon-Partner verdiene ich an qualifizierten Verkäufen.';
+const DISCLOSURE = '#ad · Affiliate link';
 const NO_MENTIONS = { parse: [] as never[], repliedUser: false };
 const buttons = (...items: ButtonBuilder[]) => new ActionRowBuilder<ButtonBuilder>().addComponents(...items);
 const button = (id: string, text: string, style = ButtonStyle.Secondary) => new ButtonBuilder().setCustomId(id).setLabel(text).setStyle(style);
@@ -29,8 +41,24 @@ const link = (url: string, text: string) => new ButtonBuilder().setURL(url).setL
 export class AmazonDiscordController {
   private setup = new DraftStore<SetupData>();
   private products = new DraftStore<ProductData>();
+  private programPosts = new DraftStore<ProgramPostData>();
+  private queueDrafts = new DraftStore<QueueDraftData>();
   private links: ProductLinkService;
-  constructor(private client: Client, private repo: ConfigRepository, private deliveries: DeliveryRepository, private allowedGuildId?: string) { this.links = new ProductLinkService(repo); }
+  private programLinks: AmazonProgramLinkService;
+  private programRenderer = new ProgramTemplateRenderer();
+  private affiliateMarkdown = new AffiliateMarkdownRenderer();
+  constructor(
+    private client: Client,
+    private repo: ConfigRepository,
+    private deliveries: DeliveryRepository,
+    private allowedGuildId?: string,
+    private templates?: AmazonProgramTemplateRepository,
+    private queues?: AmazonPostQueueRepository,
+    private queueScheduler?: AmazonQueueScheduler,
+  ) {
+    this.links = new ProductLinkService(repo);
+    this.programLinks = new AmazonProgramLinkService(repo);
+  }
   register() {
     this.client.on(Events.InteractionCreate, i => { void this.handle(i).catch(() => console.warn(JSON.stringify({ event: 'interaction_response_failed' }))); });
     this.client.on(Events.MessageCreate, m => { void this.onMessage(m).catch(() => console.warn(JSON.stringify({ event: 'automatic_link_failed' }))); });
@@ -39,6 +67,7 @@ export class AmazonDiscordController {
     const payload = { content, components, embeds, allowedMentions: NO_MENTIONS };
     if (i.deferred || i.replied) await i.editReply(payload);
     else if (i.isMessageComponent()) await i.update(payload);
+    else if (i.isModalSubmit() && i.isFromMessage()) await i.update(payload);
     else await i.reply({ ...payload, ephemeral: true });
   }
   private async handle(i: Interaction) {
@@ -51,29 +80,83 @@ export class AmazonDiscordController {
       const [, kind, id, action] = i.customId.split(':');
       if (kind === 'setup') await this.setupAction(i, id, action);
       else if (kind === 'product') await this.productAction(i, id, action);
-      else throw new UserInputError('This is an old control. Run /amazon setup again.');
+      else if (kind === 'programs') await this.programsAction(i, id, action);
+      else if (kind === 'programpost') await this.programPostAction(i, id, action);
+      else if (kind === 'template') await this.templateAction(i, id, action);
+      else if (kind === 'templateedit') await this.templateEditAction(i, id, action);
+      else if (kind === 'queue') await this.queueAction(i, id, action);
+      else if (kind === 'queuedraft') await this.queueDraftAction(i, id, action);
+      else throw new UserInputError('This is an old control. Start the relevant /amazon command again.');
     } catch (error) {
       const content = error instanceof UserInputError ? error.message : 'The action could not be completed. Check the bot permissions and start the command again.';
       // Never dump an exception: Discord errors can contain request bodies/tokens.
       if (!(error instanceof UserInputError)) console.warn(JSON.stringify({ event: 'amazon_action_failed', guildId: i.guildId }));
       if (i.deferred || i.replied) await i.editReply({ content, components: [], embeds: [], allowedMentions: NO_MENTIONS });
+      else if (i.isModalSubmit() && i.isFromMessage()) await i.update({ content, components: [], embeds: [], allowedMentions: NO_MENTIONS });
       else await i.reply({ content, ephemeral: true, allowedMentions: NO_MENTIONS });
     }
   }
   private async command(i: ChatInputCommandInteraction) {
     const guildId = i.guildId!;
+    const group = (i.options as any).getSubcommandGroup?.(false) ?? null;
     const sub = i.options.getSubcommand();
+    if (group === 'queue') return this.queueCommand(i, sub);
     if (sub === 'link') {
       const result = this.links.generate(guildId, i.options.getString('url', true).trim());
       const oneLink = this.repo.listMarketplaces(guildId).some(m => m.marketplace === result.marketplace && m.enabled && m.onelink_enabled);
       const content = `**${result.affiliate ? 'Your affiliate link' : 'Your product link'} — only visible to you**\n<${result.url}>\n\n${result.affiliate ? DISCLOSURE : 'Basic mode: no affiliate tag added.'}\n\nSource: ${LABELS[result.marketplace]} · ASIN ${result.asin}\n${oneLink && result.affiliate ? 'OneLink: declared by you; redirection and commission are not verified.' : 'OneLink is not required to generate this link.'}\n\nCopy the link together with its disclosure, or use /amazon product for a reviewed channel post. No public message was sent.`;
       return this.show(i, content, [buttons(link(result.url, 'Open on Amazon'), link(ONE_LINK, 'OneLink guide'))]);
     }
+    if (sub === 'post') {
+      if (!i.channelId || !this.repo.isLinkChannel(guildId, i.channelId)) throw new UserInputError('This channel is not configured for Amazon. Run /amazon setup here first.');
+      const input = i.options.getString('url', true).trim();
+      const result = this.links.generate(guildId, input);
+      const presentation = buildQuickProductPresentation(
+        input,
+        i.options.getString('title'),
+        i.options.getString('text'),
+      );
+      const style = i.options.getString('style') ?? 'AUTO';
+      const channel = await this.targetChannel(guildId, i.channelId, i.user.id);
+      const eventId = `quickpost:${i.id}`;
+      if (!this.deliveries.reserve(guildId, eventId, channel.id, result.canonicalUrl)) {
+        throw new UserInputError('This post already has a delivery attempt. Check the channel before retrying.');
+      }
+      const useEmbed = style === 'EMBED';
+      const useNativePreview = style === 'AUTO';
+      const payload = useEmbed
+        ? {
+            content: result.affiliate ? DISCLOSURE : 'Amazon product link · No affiliate tag added.',
+            embeds: [new EmbedBuilder()
+              .setTitle(escapeMarkdown(presentation.title))
+              .setURL(result.url)
+              .setDescription(escapeMarkdown(presentation.description))
+              .setFooter({ text: `${LABELS[result.marketplace]} · ASIN ${result.asin} · No live product data fetched` })],
+            components: [buttons(link(result.url, 'Open on Amazon'))],
+            allowedMentions: NO_MENTIONS,
+          }
+        : {
+            content: useNativePreview
+              ? buildSmartAutoCopy(escapeMarkdown(presentation.title), result.url, result.affiliate)
+              : `${result.affiliate ? DISCLOSURE : 'Amazon product link · No affiliate tag added.'}${presentation.title !== `Amazon product ${result.asin}` ? `\n**${escapeMarkdown(presentation.title)}**` : ''}`,
+            components: [buttons(link(result.url, 'Open on Amazon'))],
+            allowedMentions: NO_MENTIONS,
+          };
+      try {
+        const message = await channel.send(payload);
+        this.deliveries.sent(guildId, eventId, message.id);
+      } catch {
+        this.deliveries.unknown(guildId, eventId);
+        throw new UserInputError('Delivery could not be confirmed. Check this channel before retrying; the bot will not automatically resend.');
+      }
+      return this.show(i, `Affiliate post published in <#${channel.id}>. The Amazon link stayed on its original marketplace; the bot-generated post copy remains English.`);
+    }
     if (sub === 'setup') {
       const current = this.repo.getGuild(guildId);
       const active = this.repo.listMarketplaces(guildId).filter(m => m.enabled);
       const draft = this.setup.create(i.id, guildId, i.user.id, 'mode', {
         revision: current.revision,
+        channelPage: 0,
         config: { productMode: current.product_mode, marketplaces: active.map(m => m.marketplace),
           tags: Object.fromEntries(active.map(m => [m.marketplace, m.affiliate_tag])),
           oneLinkDeclared: active.some(m => !!m.onelink_enabled),
@@ -85,13 +168,62 @@ export class AmazonDiscordController {
       this.products.create(i.id, guildId, i.user.id, 'details', { url: '', title: '', note: '', revision: this.repo.getGuild(guildId).revision });
       return i.showModal(this.productModal(i.id));
     }
+    if (sub === 'programs') return this.programsHome(i);
+    if (sub === 'settings') return this.settingsView(i);
     if (sub === 'guide') return this.show(i, '**Affiliate links — no product API needed**\nUse /amazon link url:<full product URL> to get your link privately. Use /amazon product for a preview before a public post. With BUTTON or REPLY enabled, new untagged Amazon links in configured channels receive a bot reply automatically. Already-tagged links are skipped automatically.\n\nAffiliate mode uses your real ID for each original marketplace. Basic mode remains available without a partner account. Only full DE/US/UK product URLs are supported; expand amzn.to / amzn.eu links yourself. A product name alone is not a product lookup.\n\nOneLink is optional and configured with Amazon. A saved declaration does not verify Discord redirection or account approval. No live prices, pictures or deals are fetched. Check that your actual Discord/site usage is accepted by Amazon and provide the separate account/site disclosure.', [buttons(link(ONE_LINK, 'Amazon OneLink guide'), link(DISCLOSURE_GUIDE, 'Why disclose affiliate links?'))]);
     const g = this.repo.getGuild(guildId);
     const markets = this.repo.listMarketplaces(guildId).filter(m => m.enabled);
     const channels = this.repo.listLinkChannels(guildId);
-    const content = `**Amazon ${sub === 'status' ? 'Status' : 'Settings'}**\nMode: ${g.product_mode}\nLink behavior: ${g.link_mode}\nMarketplaces: ${markets.map(m => LABELS[m.marketplace]).join(', ') || 'Not configured'}\nChannels: ${channels.map(c => `<#${c.channel_id}>`).join(', ') || 'Not configured'}\nOneLink: ${markets.some(m => m.onelink_enabled) ? 'Declared by operator; not verified' : 'Not declared / not used'}\nServer scope: ${this.allowedGuildId ? 'Restricted to this test server' : 'Configured servers'}\n\nAPI access is not required for this version.\nUnresolved delivery attempts: ${this.deliveries.unresolved(guildId)}\nUse /amazon setup to edit, /amazon link for a private link, or /amazon product to compose a post.`;
+    const programReady = (() => { try { this.programLinks.generate(guildId, 'amazon_visa'); return true; } catch { return false; } })();
+    const activeTemplates = this.templates?.activeCount(guildId) ?? 0;
+    const content = `**Amazon Status**\nMode: ${g.product_mode}\nLink behavior: ${g.link_mode}\nMarketplace rule: **Original source link**\nMarketplaces: ${markets.map(m => LABELS[m.marketplace]).join(', ') || 'Not configured'}\nChannels: ${channels.map(c => `<#${c.channel_id}>`).join(', ') || 'Not configured'}\nOneLink: ${markets.some(m => m.onelink_enabled) ? 'Optional Amazon-side setup declared by operator' : 'Optional · not configured'}\nAmazon Programs: ${programReady ? '3 available' : 'Requires Amazon.de Affiliate tracking ID'}\nProgram templates: ${activeTemplates} active\nServer scope: ${this.allowedGuildId ? 'Restricted to this test server' : 'Configured servers'}\n\nAPI access is not required for this version.\nUnresolved delivery attempts: ${this.deliveries.unresolved(guildId)}`;
     return this.show(i, content, [buttons(link(ONE_LINK, 'OneLink setup'), link(DISCLOSURE_GUIDE, 'Disclosure guide'))]);
   }
+  private async settingsView(i: UI) {
+    const g = this.repo.getGuild(i.guildId!);
+    const markets = this.repo.listMarketplaces(i.guildId!).filter(m => m.enabled);
+    const channels = this.repo.listLinkChannels(i.guildId!);
+    return this.show(i,
+      `**Amazon Settings**\nMode: **${g.product_mode}**\nLink behavior: **${g.link_mode}**\n\n**Marketplace rule**\nProduct links always stay on their original Amazon marketplace. A .de link stays .de, .com stays .com and .co.uk stays .co.uk. This avoids broken cross-marketplace ASIN links.\n\n**Tracking IDs**\n${markets.map(m => `• ${LABELS[m.marketplace]} — ${m.affiliate_tag}`).join('\n') || '_No affiliate IDs configured._'}\n\n**Configured channels**\n${channels.map(row => `• <#${row.channel_id}>`).join('\n') || '_No channels configured._'}\n\nPublic post text is written in English by the bot/templates. Discord's native Amazon preview may still follow the language of the source marketplace.`,
+      [buttons(link(ONE_LINK, 'OneLink guide'), link(DISCLOSURE_GUIDE, 'Disclosure guide'))],
+    );
+  }
+
+  private async getChannelPage(guildId: string, requestedPage: number, allowedIds?: string[]): Promise<ChannelChoicePage> {
+    const guild = await this.client.guilds.fetch(guildId);
+    const fetched = await guild.channels.fetch();
+    const allowed = allowedIds ? new Set(allowedIds) : null;
+    const choices = [...fetched.values()]
+      .filter(channel => channel && channel.type === ChannelType.GuildText && (!allowed || allowed.has(channel.id)))
+      .map(channel => {
+        const value = channel as any;
+        return {
+          id: value.id as string,
+          name: String(value.name ?? 'channel'),
+          category: value.parent?.name ? String(value.parent.name) : undefined,
+          position: Number(value.rawPosition ?? value.position ?? 0),
+        };
+      });
+    return paginateChannelChoices(choices, requestedPage, 20);
+  }
+
+  private channelSelectRow(customId: string, page: ChannelChoicePage, selectedIds: string[] = []) {
+    if (!page.items.length) return null;
+    const selected = new Set(selectedIds);
+    const menu = new StringSelectMenuBuilder()
+      .setCustomId(customId)
+      .setPlaceholder(`Select channels · page ${page.page + 1}/${page.totalPages}`)
+      .setMinValues(0)
+      .setMaxValues(Math.min(5, page.items.length))
+      .addOptions(...page.items.map(channel => ({
+        label: `# ${channel.name}`.slice(0, 100),
+        value: channel.id,
+        description: (channel.category ? `Category: ${channel.category}` : 'No category').slice(0, 100),
+        default: selected.has(channel.id),
+      })));
+    return new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(menu);
+  }
+
   private async setupView(i: UI, id: string, draft: Draft<SetupData>) {
     const c = draft.data.config;
     const key = (action: string) => `amazon:setup:${id}:${action}`;
@@ -101,17 +233,26 @@ export class AmazonDiscordController {
       content = '**Step 1 / 6 — What do you need?**\nAffiliate: turn product URLs into your own affiliate links. No product API is needed.\nBasic: share products without tracking or an Associates account.\nNothing changes until you review and save.';
       rows.push(new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(new StringSelectMenuBuilder().setCustomId(key('mode')).setPlaceholder('Choose Affiliate or Basic').addOptions({ label: 'Affiliate — my tracking IDs', value: 'AFFILIATE' }, { label: 'Basic — no partner account', value: 'BASIC' })));
     } else if (draft.step === 'marketplaces') {
-      content = '**Step 2 / 6 — Choose marketplaces**\nOnly select the stores you intend to use. Product domains are never swapped. This release supports DE, US and UK.';
+      content = '**Step 2 / 6 — Choose marketplaces**\nOnly select stores for which you have a real tracking ID. This release supports DE, US and UK. Product links always stay on their original marketplace.';
       rows.push(new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(new StringSelectMenuBuilder().setCustomId(key('marketplaces')).setPlaceholder('Select marketplaces').setMinValues(1).setMaxValues(3).addOptions(...Object.keys(MARKETPLACES).map(code => ({ label: LABELS[code as MarketplaceCode], value: code, default: c.marketplaces.includes(code as MarketplaceCode) })))));
     } else if (draft.step === 'tags') {
       content = '**Step 2 / 6 — Your tracking IDs**\nEnter the actual ID for each chosen store. Never change an ID suffix to invent a foreign ID. Do not enter API credentials.';
       rows.push(buttons(button(key('open_tags'), 'Enter tracking IDs', ButtonStyle.Primary)));
     } else if (draft.step === 'onelink') {
-      content = '**Step 3 / 6 — OneLink (optional)**\nComplete OneLink with Amazon first. The bot records your declaration only; it does not activate or verify it. Redirection depends on Amazon, your account and the actual link. Individual marketplace IDs work without OneLink.';
-      rows.push(buttons(button(key('onelink_yes'), 'I configured OneLink'), button(key('onelink_no'), 'Use individual IDs'), link(ONE_LINK, 'Amazon setup guide')));
+      content = '**Step 3 / 6 — OneLink (optional information)**\nOneLink is configured in Amazon PartnerNet, not in this bot. It is not required for product or program links. You can use individual marketplace tracking IDs without it.';
+      rows.push(buttons(button(key('onelink_yes'), 'I use OneLink (optional)'), button(key('onelink_no'), 'Skip OneLink'), link(ONE_LINK, 'Open OneLink guide')));
     } else if (draft.step === 'channels') {
-      content = '**Step 4 / 6 — Product channels**\nChoose 1–5 text channels for manual posts and optional automatic link replies. Saving replaces the previous enabled channel selection.';
-      rows.push(new ActionRowBuilder<ChannelSelectMenuBuilder>().addComponents(new ChannelSelectMenuBuilder().setCustomId(key('channels')).setPlaceholder('Choose product channels').setChannelTypes(ChannelType.GuildText).setMinValues(1).setMaxValues(5)));
+      const page = await this.getChannelPage(i.guildId!, draft.data.channelPage);
+      draft.data.channelPage = page.page;
+      content = `**Step 4 / 6 — Product channels**\nChoose 1–5 text channels for manual posts and optional automatic link replies. Channels are paginated so none are hidden. Category names are shown inside the list.\n\nPage: **${page.page + 1} / ${page.totalPages}** · Selected: **${c.channels.length} / 5**`;
+      const select = this.channelSelectRow(key('channels'), page, c.channels);
+      if (select) rows.push(select);
+      const nav: ButtonBuilder[] = [];
+      if (page.page > 0) nav.push(button(key('channels_prev'), 'Previous'));
+      if (page.page + 1 < page.totalPages) nav.push(button(key('channels_next'), 'Next'));
+      nav.push(button(key('current_channel'), 'Use this channel', ButtonStyle.Primary));
+      nav.push(button(key('channels_continue'), 'Continue', ButtonStyle.Success));
+      rows.push(buttons(...nav));
     } else if (draft.step === 'behavior') {
       content = '**Step 5 / 6 — Automatic link replies**\nButtons or replies operate only in your selected channels. Off still allows private link generation and reviewed manual posts. Already-tagged links are skipped automatically. Original member messages stay untouched.';
       rows.push(new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(new StringSelectMenuBuilder().setCustomId(key('behavior')).setPlaceholder('Choose behavior').addOptions({ label: 'Off — manual posts only', value: 'OFF' }, { label: 'Compact Amazon button', value: 'BUTTON' }, { label: 'Reply with affiliate / product link', value: 'REPLY' })));
@@ -146,7 +287,17 @@ export class AmazonDiscordController {
       draft.step = c.productMode === 'AFFILIATE' ? 'tags' : 'channels';
     } else if (action === 'open_tags' && i.isButton()) {
       this.setup.requireStep(draft, 'tags');
-      return i.showModal(new ModalBuilder().setCustomId(`amazon:setup:${id}:tags`).setTitle('Marketplace tracking IDs').addComponents(...c.marketplaces.map(m => new ActionRowBuilder<TextInputBuilder>().addComponents(new TextInputBuilder().setCustomId(m).setLabel(`${LABELS[m]} tracking ID`).setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(100)))));
+      return i.showModal(new ModalBuilder().setCustomId(`amazon:setup:${id}:tags`).setTitle('Marketplace tracking IDs').addComponents(...c.marketplaces.map(m => {
+        const input = new TextInputBuilder()
+          .setCustomId(m)
+          .setLabel(`${LABELS[m]} tracking ID`)
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true)
+          .setMaxLength(100);
+        const saved = c.tags[m]?.trim();
+        if (saved) input.setValue(saved.slice(0, 100));
+        return new ActionRowBuilder<TextInputBuilder>().addComponents(input);
+      })));
     } else if (action === 'tags' && i.isModalSubmit()) {
       this.setup.requireStep(draft, 'tags');
       const tags = Object.fromEntries(c.marketplaces.map(m => [m, i.fields.getTextInputValue(m).trim()]));
@@ -155,8 +306,29 @@ export class AmazonDiscordController {
       draft.step = 'onelink';
     } else if (['onelink_yes', 'onelink_no'].includes(action) && i.isButton()) {
       this.setup.requireStep(draft, 'onelink'); c.oneLinkDeclared = action === 'onelink_yes'; draft.step = 'channels';
-    } else if (action === 'channels' && i.isChannelSelectMenu()) {
-      this.setup.requireStep(draft, 'channels'); c.channels = i.values; draft.step = 'behavior';
+    } else if (action === 'channels' && i.isStringSelectMenu()) {
+      this.setup.requireStep(draft, 'channels');
+      const page = await this.getChannelPage(i.guildId!, draft.data.channelPage);
+      const pageIds = new Set(page.items.map(channel => channel.id));
+      const merged = [...c.channels.filter(channelId => !pageIds.has(channelId)), ...i.values];
+      c.channels = [...new Set(merged)];
+      if (c.channels.length > 5) throw new UserInputError('Choose at most five Amazon channels.');
+    } else if (action === 'channels_prev' && i.isButton()) {
+      this.setup.requireStep(draft, 'channels');
+      draft.data.channelPage = Math.max(0, draft.data.channelPage - 1);
+    } else if (action === 'channels_next' && i.isButton()) {
+      this.setup.requireStep(draft, 'channels');
+      draft.data.channelPage += 1;
+    } else if (action === 'channels_continue' && i.isButton()) {
+      this.setup.requireStep(draft, 'channels');
+      if (!c.channels.length) throw new UserInputError('Choose at least one Amazon channel.');
+      draft.step = 'behavior';
+    } else if (action === 'current_channel' && i.isButton()) {
+      this.setup.requireStep(draft, 'channels');
+      if (!i.channelId) throw new UserInputError('Run /amazon setup inside the text channel you want to use, or choose a channel from the list.');
+      await this.targetChannel(i.guildId!, i.channelId, i.user.id);
+      c.channels = [...new Set([...c.channels, i.channelId])];
+      if (c.channels.length > 5) throw new UserInputError('Choose at most five Amazon channels.');
     } else if (action === 'behavior' && i.isStringSelectMenu()) {
       this.setup.requireStep(draft, 'behavior');
       if (!['OFF', 'REPLY', 'BUTTON'].includes(i.values[0])) throw new UserInputError('Choose a valid link behavior.');
@@ -229,6 +401,763 @@ export class AmazonDiscordController {
     }
     throw new UserInputError('This control is no longer current. Run /amazon product again.');
   }
+
+  private requireQueue(): AmazonPostQueueRepository {
+    if (!this.queues) throw new UserInputError('Amazon queue is not available in this runtime.');
+    return this.queues;
+  }
+
+  private requireQueueScheduler(): AmazonQueueScheduler {
+    if (!this.queueScheduler) throw new UserInputError('Amazon queue scheduler is not available in this runtime.');
+    return this.queueScheduler;
+  }
+
+  private async queueCommand(i: ChatInputCommandInteraction, sub: string) {
+    const guildId = i.guildId!;
+    const queues = this.requireQueue();
+
+    if (sub === 'manage') return this.queueDashboard(i);
+
+    if (sub === 'import') {
+      const attachment = i.options.getAttachment('file', true);
+      if (attachment.size > 256_000) throw new UserInputError('Queue JSON must be 256 KB or smaller.');
+      if (!attachment.name.toLowerCase().endsWith('.json')) throw new UserInputError('Upload a .json file.');
+      const response = await fetch(attachment.url);
+      if (!response.ok) throw new UserInputError('The JSON file could not be downloaded from Discord. Try uploading it again.');
+      const raw = await response.text();
+      const doc = parseQueueImportJson(raw);
+
+      for (const [index, post] of doc.posts.entries()) {
+        try {
+          this.links.generate(guildId, post.url);
+          this.affiliateMarkdown.validate(post.markdown);
+        } catch (error) {
+          if (error instanceof UserInputError) throw new UserInputError(`Post #${index + 1}: ${error.message}`);
+          throw error;
+        }
+      }
+
+      const imported = queues.addMany(guildId, i.user.id, doc.posts.map(post => ({
+        url: post.url,
+        title: post.name ?? null,
+        body: post.markdown,
+        style: 'MARKDOWN' as QueueItemStyle,
+      })));
+
+      if (doc.interval_hours) {
+        const current = queues.getOrCreate(guildId, i.user.id);
+        const updated = queues.updateSettings(guildId, i.user.id, current.channel_id, doc.interval_hours);
+        if (updated.enabled) queues.scheduleNext(updated.id, Date.now() + doc.interval_hours * 60 * 60 * 1000, true);
+      }
+
+      const queue = queues.get(guildId);
+      const rhythm = doc.interval_hours ?? queue?.interval_hours ?? 24;
+      const running = !!queue?.enabled;
+      const channel = queue?.channel_id ? `<#${queue.channel_id}>` : 'not configured yet';
+      return this.show(i,
+        `✅ **Queue import complete**\nImported: **${imported.length} posts**\nPending total: **${queues.pending(guildId).length}**\nInterval: **${rhythm}h**\nChannel: ${channel}\nStatus: **${running ? 'Running' : 'Paused'}**\n\n${running ? 'The imported posts will join the existing schedule automatically.' : 'Open /amazon queue manage, choose the channel if needed, and press Start when you are ready.'}`,
+        [buttons(button('amazon:queue:dashboard:back', 'Open Queue Manager', ButtonStyle.Primary))]
+      );
+    }
+
+    if (sub === 'add') {
+      const url = i.options.getString('url', true).trim();
+      this.links.generate(guildId, url);
+      const item = queues.add(guildId, i.user.id, {
+        url,
+        title: i.options.getString('title'),
+        body: i.options.getString('text'),
+        style: (i.options.getString('style') ?? 'AUTO') as QueueItemStyle,
+      });
+      const pending = queues.pending(guildId).length;
+      return this.show(i, `Added queue item **#${item.id}**. Pending posts: **${pending}**.\nUse "/amazon queue start" to set 12h/24h posting, or "/amazon queue next" to post the first item now.`);
+    }
+
+    if (sub === 'start') {
+      const channel = i.options.getChannel('channel', true);
+      const interval = i.options.getInteger('interval', true);
+      if (![12, 24].includes(interval)) throw new UserInputError('Choose a 12h or 24h interval.');
+      if (!this.repo.isLinkChannel(guildId, channel.id)) throw new UserInputError('That channel is not configured for Amazon. Add it in /amazon setup first.');
+      await this.targetChannel(guildId, channel.id, i.user.id);
+      const queue = queues.configure(guildId, i.user.id, channel.id, interval, Date.now() + interval * 60 * 60 * 1000);
+      const pending = queues.pending(guildId).length;
+      return this.show(i, `**Amazon queue started**\nChannel: <#${channel.id}>\nInterval: every **${queue.interval_hours} hours**\nPending: **${pending}**\nNext automatic post: <t:${Math.floor((queue.next_run_at ?? Date.now()) / 1000)}:R>\n\nUse "/amazon queue next" if you want the first queued item posted immediately.`);
+    }
+
+    if (sub === 'edit') {
+      const itemId = i.options.getInteger('id', true);
+      const current = queues.getItem(guildId, itemId);
+      if (current.state !== 'PENDING') throw new UserInputError('Only pending queue items can be edited.');
+      const title = i.options.getString('title');
+      const body = i.options.getString('text');
+      const style = i.options.getString('style') as QueueItemStyle | null;
+      if (title === null && body === null && style === null) {
+        throw new UserInputError('Provide at least one field to change: title, text or style.');
+      }
+      const updated = queues.update(guildId, itemId, {
+        title: title === null ? undefined : title,
+        body: body === null ? undefined : body,
+        style: style ?? undefined,
+      });
+      const inferred = inferProductTitleFromAmazonUrl(updated.url);
+      const label = updated.title || inferred || `Amazon item #${updated.id}`;
+      return this.show(i, `**Queue item #${updated.id} updated**\nTitle: **${escapeMarkdown(label).slice(0, 120)}**\nDescription: ${updated.body ? escapeMarkdown(updated.body).slice(0, 500) : '_Default Amazon details text_'}\nStyle: **${updated.style}**\n\nUse /amazon queue preview id:${updated.id} to review it before publication.`);
+    }
+
+    if (sub === 'preview') {
+      const itemId = i.options.getInteger('id', true);
+      const item = queues.getItem(guildId, itemId);
+      if (item.state !== 'PENDING') throw new UserInputError('Only pending queue items can be previewed.');
+      const result = this.links.generate(guildId, item.url);
+      const presentation = buildQuickProductPresentation(item.url, item.title, item.body);
+      const useEmbed = item.style === 'EMBED';
+      const useNativePreview = item.style === 'AUTO';
+      const previewBody = item.style === 'MARKDOWN' && item.body
+        ? this.affiliateMarkdown.render(item.body, result.url)
+        : useNativePreview
+          ? buildSmartAutoCopy(escapeMarkdown(presentation.title), result.url, result.affiliate)
+          : `${result.affiliate ? DISCLOSURE : 'Amazon product link · No affiliate tag added.'}${!useEmbed && presentation.title !== `Amazon product ${result.asin}` ? `\n**${escapeMarkdown(presentation.title)}**` : ''}`;
+      const content = `**Queue Preview — not published**\nItem: **#${item.id}** · Style: **${item.style}**\n\n${previewBody}`;
+      const embeds = useEmbed
+        ? [new EmbedBuilder()
+            .setTitle(escapeMarkdown(presentation.title))
+            .setURL(result.url)
+            .setDescription(escapeMarkdown(presentation.description))
+            .setFooter({ text: `${LABELS[result.marketplace]} · ASIN ${result.asin} · No live product data fetched` })]
+        : [];
+      return this.show(i, content, [buttons(link(result.url, 'Open on Amazon'))], embeds);
+    }
+
+    if (sub === 'status') {
+      const queue = queues.get(guildId);
+      const items = queues.list(guildId);
+      if (!queue) return this.show(i, '**Amazon Queue**\nNo queue yet. Add products with /amazon queue add.');
+      const pending = items.filter(item => item.state === 'PENDING');
+      const lines = pending.slice(0, 10).map(item => {
+        let label = `Amazon item #${item.id}`;
+        const inferred = inferProductTitleFromAmazonUrl(item.url);
+        if (item.title || inferred) label = item.title || inferred!;
+        return `#${item.id} · ${escapeMarkdown(label).slice(0, 80)}`;
+      });
+      const next = queue.next_run_at ? `<t:${Math.floor(queue.next_run_at / 1000)}:R>` : 'Not scheduled';
+      return this.show(i, `**Amazon Queue**\nStatus: **${queue.enabled ? 'Running' : 'Paused'}**\nChannel: ${queue.channel_id ? `<#${queue.channel_id}>` : 'Not configured'}\nInterval: **${queue.interval_hours}h**\nNext automatic post: ${next}\nPending: **${pending.length}**\n\n${lines.length ? lines.join('\n') : '_Queue is empty._'}${pending.length > 10 ? `\n… and ${pending.length - 10} more` : ''}`);
+    }
+
+    if (sub === 'pause') {
+      queues.pause(guildId);
+      return this.show(i, `Amazon queue paused. **${queues.pending(guildId).length}** posts remain pending.`);
+    }
+
+    if (sub === 'resume') {
+      const current = queues.get(guildId);
+      if (!current) throw new UserInputError('No Amazon queue exists yet.');
+      const queue = queues.resume(guildId, Date.now() + current.interval_hours * 60 * 60 * 1000);
+      return this.show(i, `Amazon queue resumed. Next automatic post: <t:${Math.floor((queue.next_run_at ?? Date.now()) / 1000)}:R>.`);
+    }
+
+    if (sub === 'remove' || sub === 'skip') {
+      const itemId = i.options.getInteger('id', true);
+      if (sub === 'remove') queues.remove(guildId, itemId);
+      else queues.skip(guildId, itemId);
+      return this.show(i, `Queue item #${itemId} ${sub === 'remove' ? 'removed' : 'skipped'}. Pending: **${queues.pending(guildId).length}**.`);
+    }
+
+    if (sub === 'next') {
+      const result = await this.requireQueueScheduler().runNow(guildId);
+      if (result === 'SENT') return this.show(i, 'Next Amazon queue item published.');
+      if (result === 'EMPTY') return this.show(i, 'The Amazon queue has no pending item.');
+      return this.show(i, 'The next queue delivery could not be confirmed. The queue was paused to prevent duplicate posting. Check the target channel and /amazon queue status.');
+    }
+
+    throw new UserInputError('Unknown Amazon queue action.');
+  }
+
+  private async queueDashboard(i: UI) {
+    const queues = this.requireQueue();
+    const queue = queues.get(i.guildId!);
+    const pending = queues.pending(i.guildId!);
+    const status = queue?.enabled ? 'Running' : 'Paused';
+    const channel = queue?.channel_id ? `<#${queue.channel_id}>` : 'Not configured';
+    const next = queue?.next_run_at ? `<t:${Math.floor(queue.next_run_at / 1000)}:R>` : 'Not scheduled';
+    const primary = buttons(
+      button('amazon:queue:dashboard:add', '➕ Add Post', ButtonStyle.Primary),
+      button('amazon:queue:dashboard:view', '📋 View Queue'),
+      button('amazon:queue:dashboard:toggle', queue?.enabled ? '⏸ Pause' : '▶ Start'),
+    );
+    const secondary = buttons(
+      button('amazon:queue:dashboard:settings', '⚙️ Queue Settings'),
+      button('amazon:queue:dashboard:next', '⏭ Post Next'),
+      button('amazon:queue:dashboard:refresh', '🔄 Refresh'),
+    );
+    return this.show(i,
+      `**Amazon Queue Manager**\nStatus: **${status}**\nMarketplace: **Original source link**\nChannel: ${channel}\nInterval: **${queue?.interval_hours ?? 24}h**\nPending posts: **${pending.length}**\nNext automatic post: ${next}\n\nUse **Add Post** for a clean Markdown editor. The bot replaces {affiliate_link} when publishing and adds the affiliate disclosure automatically.`,
+      [primary, secondary],
+    );
+  }
+
+  private queuePostModal(id: string, draft?: QueueDraftData) {
+    const url = new TextInputBuilder()
+      .setCustomId('url').setLabel('Amazon product URL')
+      .setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(1500)
+      .setPlaceholder('https://www.amazon.de/.../dp/ASIN');
+    if (draft?.url) url.setValue(draft.url.slice(0, 1500));
+
+    const body = new TextInputBuilder()
+      .setCustomId('body').setLabel('Post message (Markdown)')
+      .setStyle(TextInputStyle.Paragraph).setRequired(true).setMaxLength(1600)
+      .setPlaceholder('🖱️ **Product name**\n\nShort description.\n\n👉 {affiliate_link}');
+    if (draft?.body) body.setValue(draft.body.slice(0, 1600));
+
+    const name = new TextInputBuilder()
+      .setCustomId('name').setLabel('Internal name (optional)')
+      .setStyle(TextInputStyle.Short).setRequired(false).setMaxLength(80)
+      .setPlaceholder('G305 mouse');
+    if (draft?.name) name.setValue(draft.name.slice(0, 80));
+
+    return new ModalBuilder()
+      .setCustomId(`amazon:queuedraft:${id}:details`)
+      .setTitle(draft?.itemId ? 'Edit queued Amazon post' : 'Add Amazon queue post')
+      .addComponents(
+        new ActionRowBuilder<TextInputBuilder>().addComponents(url),
+        new ActionRowBuilder<TextInputBuilder>().addComponents(body),
+        new ActionRowBuilder<TextInputBuilder>().addComponents(name),
+      );
+  }
+
+  private async queueDraftPreview(i: UI, id: string) {
+    const draft = this.queueDrafts.get(id, i.guildId!, i.user.id);
+    const result = this.links.generate(i.guildId!, draft.data.url);
+    const rendered = this.affiliateMarkdown.render(draft.data.body, result.url);
+    return this.show(i,
+      `**Preview — not added to queue**\n${draft.data.name ? `Internal name: **${escapeMarkdown(draft.data.name)}**\n` : ''}\n${rendered}`,
+      [
+        buttons(
+          button(`amazon:queuedraft:${id}:save`, draft.data.itemId ? 'Save Changes' : 'Add to Queue', ButtonStyle.Success),
+          button(`amazon:queuedraft:${id}:edit`, 'Edit'),
+          button(`amazon:queuedraft:${id}:cancel`, 'Cancel', ButtonStyle.Danger),
+        ),
+      ],
+    );
+  }
+
+  private async queueListView(i: UI) {
+    const pending = this.requireQueue().pending(i.guildId!);
+    if (!pending.length) return this.show(i, '**Amazon Queue**\nNo pending posts.', [buttons(button('amazon:queue:dashboard:back', 'Back'))]);
+    const select = new StringSelectMenuBuilder()
+      .setCustomId('amazon:queue:item:select')
+      .setPlaceholder('Choose a queued post')
+      .addOptions(...pending.slice(0, 25).map(item => ({
+        label: (item.title || inferProductTitleFromAmazonUrl(item.url) || `Queue item #${item.id}`).slice(0, 100),
+        value: String(item.id),
+        description: `#${item.id} · ${item.style}`.slice(0, 100),
+      })));
+    return this.show(i,
+      `**Queued Posts**\nPending: **${pending.length}**\nSelect a post to preview, edit or remove it.`,
+      [
+        new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(select),
+        buttons(button('amazon:queue:dashboard:back', 'Back')),
+      ],
+    );
+  }
+
+  private async queueItemView(i: UI, itemId: number) {
+    const item = this.requireQueue().getItem(i.guildId!, itemId);
+    if (item.state !== 'PENDING') throw new UserInputError('This queue item is no longer pending.');
+    const result = this.links.generate(i.guildId!, item.url);
+    const body = item.style === 'MARKDOWN' && item.body
+      ? this.affiliateMarkdown.render(item.body, result.url)
+      : buildSmartAutoCopy(item.title || inferProductTitleFromAmazonUrl(item.url) || `Amazon product ${result.asin}`, result.url, result.affiliate);
+    return this.show(i,
+      `**Queue Item #${item.id}**\nStyle: **${item.style}**\n\n${body}`,
+      [
+        buttons(
+          button(`amazon:queue:${item.id}:edit`, 'Edit', ButtonStyle.Primary),
+          button(`amazon:queue:${item.id}:remove`, 'Remove', ButtonStyle.Danger),
+          button(`amazon:queue:${item.id}:skip`, 'Skip'),
+        ),
+        buttons(button('amazon:queue:dashboard:view', 'Back to Queue')),
+      ],
+    );
+  }
+
+  private async queueSettingsView(i: UI) {
+    const queues = this.requireQueue();
+    const queue = queues.getOrCreate(i.guildId!, i.user.id);
+    const configured = this.repo.listLinkChannels(i.guildId!);
+    const guild = await this.client.guilds.fetch(i.guildId!);
+    const options = [];
+    for (const row of configured.slice(0, 25)) {
+      const channel = await guild.channels.fetch(row.channel_id).catch(() => null);
+      options.push({
+        label: channel?.name ? `# ${channel.name}`.slice(0, 100) : row.channel_id,
+        value: row.channel_id,
+        default: queue.channel_id === row.channel_id,
+      });
+    }
+    const rows: ActionRowBuilder<MessageActionRowComponentBuilder>[] = [];
+    if (options.length) {
+      rows.push(new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+        new StringSelectMenuBuilder()
+          .setCustomId('amazon:queue:settings:channel')
+          .setPlaceholder('Choose posting channel')
+          .addOptions(...options)
+      ));
+    }
+    rows.push(buttons(
+      button('amazon:queue:settings:3', 'Every 3h', queue.interval_hours === 3 ? ButtonStyle.Primary : ButtonStyle.Secondary),
+      button('amazon:queue:settings:6', 'Every 6h', queue.interval_hours === 6 ? ButtonStyle.Primary : ButtonStyle.Secondary),
+      button('amazon:queue:settings:12', 'Every 12h', queue.interval_hours === 12 ? ButtonStyle.Primary : ButtonStyle.Secondary),
+      button('amazon:queue:settings:24', 'Every 24h', queue.interval_hours === 24 ? ButtonStyle.Primary : ButtonStyle.Secondary),
+    ));
+    rows.push(buttons(
+      button('amazon:queue:settings:custom', 'Custom Interval', ButtonStyle.Primary),
+      button('amazon:queue:settings:current', 'Use this channel'),
+      button('amazon:queue:dashboard:back', 'Back'),
+    ));
+    return this.show(i,
+      `**Queue Settings**\nChannel: ${queue.channel_id ? `<#${queue.channel_id}>` : 'Not configured'}\nInterval: **${queue.interval_hours}h**\n\nChoose a quick interval or set any whole number from **1–168 hours**.`,
+      rows,
+    );
+  }
+
+  private async queueAction(i: MessageComponentInteraction | ModalSubmitInteraction, id: string, action: string) {
+    const queues = this.requireQueue();
+
+    if (id === 'dashboard') {
+      if (action === 'add' && i.isButton()) {
+        const draftId = i.id;
+        const draft = this.queueDrafts.create(draftId, i.guildId!, i.user.id, 'details', { url: '', name: '', body: '' });
+        return i.showModal(this.queuePostModal(draftId, draft.data));
+      }
+      if (action === 'view') return this.queueListView(i);
+      if (action === 'settings') return this.queueSettingsView(i);
+      if (action === 'refresh' || action === 'back') return this.queueDashboard(i);
+      if (action === 'next') {
+        const result = await this.requireQueueScheduler().runNow(i.guildId!);
+        if (result === 'SENT') return this.queueDashboard(i);
+        if (result === 'EMPTY') throw new UserInputError('The queue has no pending posts.');
+        throw new UserInputError('Delivery could not be confirmed. The queue was paused to prevent duplicates.');
+      }
+      if (action === 'toggle') {
+        const queue = queues.getOrCreate(i.guildId!, i.user.id);
+        if (queue.enabled) queues.pause(i.guildId!);
+        else {
+          if (!queue.channel_id) return this.queueSettingsView(i);
+          queues.resume(i.guildId!, Date.now() + queue.interval_hours * 60 * 60 * 1000);
+        }
+        return this.queueDashboard(i);
+      }
+    }
+
+    if (id === 'item' && action === 'select' && i.isStringSelectMenu()) {
+      return this.queueItemView(i, Number(i.values[0]));
+    }
+
+    if (id === 'settings') {
+      const current = queues.getOrCreate(i.guildId!, i.user.id);
+      if (action === 'channel' && i.isStringSelectMenu()) {
+        const channelId = i.values[0];
+        if (!this.repo.isLinkChannel(i.guildId!, channelId)) throw new UserInputError('That channel is not configured for Amazon.');
+        await this.targetChannel(i.guildId!, channelId, i.user.id);
+        queues.updateSettings(i.guildId!, i.user.id, channelId, current.interval_hours);
+        return this.queueSettingsView(i);
+      }
+      if (['3','6','12','24'].includes(action) && i.isButton()) {
+        const hours = Number(action);
+        const updated = queues.updateSettings(i.guildId!, i.user.id, current.channel_id, hours);
+        if (updated.enabled) queues.scheduleNext(updated.id, Date.now() + hours * 60 * 60 * 1000, true);
+        return this.queueSettingsView(i);
+      }
+      if (action === 'custom' && i.isButton()) {
+        const input = new TextInputBuilder()
+          .setCustomId('hours')
+          .setLabel('Interval in hours (1–168)')
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true)
+          .setMaxLength(3)
+          .setValue(String(current.interval_hours));
+        return i.showModal(new ModalBuilder()
+          .setCustomId('amazon:queue:settings:custom')
+          .setTitle('Custom Queue Interval')
+          .addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(input)));
+      }
+      if (action === 'custom' && i.isModalSubmit()) {
+        const raw = i.fields.getTextInputValue('hours').trim();
+        const hours = Number(raw);
+        if (!Number.isInteger(hours) || hours < 1 || hours > 168) throw new UserInputError('Enter a whole number from 1 to 168 hours.');
+        const updated = queues.updateSettings(i.guildId!, i.user.id, current.channel_id, hours);
+        if (updated.enabled) queues.scheduleNext(updated.id, Date.now() + hours * 60 * 60 * 1000, true);
+        return this.queueSettingsView(i);
+      }
+      if (action === 'current' && i.isButton()) {
+        if (!i.channelId || !this.repo.isLinkChannel(i.guildId!, i.channelId)) throw new UserInputError('This channel is not configured for Amazon.');
+        await this.targetChannel(i.guildId!, i.channelId, i.user.id);
+        queues.updateSettings(i.guildId!, i.user.id, i.channelId, current.interval_hours);
+        return this.queueSettingsView(i);
+      }
+    }
+
+    const itemId = Number(id);
+    if (Number.isSafeInteger(itemId) && itemId > 0) {
+      if (action === 'edit' && i.isButton()) {
+        const item = queues.getItem(i.guildId!, itemId);
+        const draftId = i.id;
+        const draft = this.queueDrafts.create(draftId, i.guildId!, i.user.id, 'details', {
+          url: item.url,
+          name: item.title ?? '',
+          body: item.style === 'MARKDOWN' && item.body ? item.body : `**${item.title || inferProductTitleFromAmazonUrl(item.url) || 'Amazon product'}**\n\n{affiliate_link}`,
+          itemId: item.id,
+        });
+        return i.showModal(this.queuePostModal(draftId, draft.data));
+      }
+      if (action === 'remove' && i.isButton()) {
+        queues.remove(i.guildId!, itemId);
+        return this.queueListView(i);
+      }
+      if (action === 'skip' && i.isButton()) {
+        queues.skip(i.guildId!, itemId);
+        return this.queueListView(i);
+      }
+    }
+
+    throw new UserInputError('This queue control is no longer current. Open /amazon queue manage again.');
+  }
+
+  private async queueDraftAction(i: MessageComponentInteraction | ModalSubmitInteraction, id: string, action: string) {
+    const draft = this.queueDrafts.get(id, i.guildId!, i.user.id);
+    if (action === 'cancel') {
+      this.queueDrafts.remove(id);
+      return this.queueDashboard(i);
+    }
+    if (action === 'edit' && i.isButton()) {
+      return i.showModal(this.queuePostModal(id, draft.data));
+    }
+    if (action === 'details' && i.isModalSubmit()) {
+      draft.data.url = i.fields.getTextInputValue('url').trim();
+      draft.data.body = i.fields.getTextInputValue('body').trim();
+      draft.data.name = i.fields.getTextInputValue('name').trim();
+      this.links.generate(i.guildId!, draft.data.url);
+      this.affiliateMarkdown.validate(draft.data.body);
+      draft.step = 'review';
+      return this.queueDraftPreview(i, id);
+    }
+    if (action === 'save' && i.isButton()) {
+      if (draft.step !== 'review') throw new UserInputError('Preview the post before saving it.');
+      const queues = this.requireQueue();
+      let item;
+      if (draft.data.itemId) {
+        item = queues.update(i.guildId!, draft.data.itemId, {
+          url: draft.data.url,
+          title: draft.data.name || null,
+          body: draft.data.body,
+          style: 'MARKDOWN',
+        });
+      } else {
+        item = queues.add(i.guildId!, i.user.id, {
+          url: draft.data.url,
+          title: draft.data.name || null,
+          body: draft.data.body,
+          style: 'MARKDOWN',
+        });
+      }
+      this.queueDrafts.remove(id);
+      return this.show(i,
+        `✅ **Added to queue**\nItem: **#${item.id}**\nPending posts: **${queues.pending(i.guildId!).length}**`,
+        [buttons(button('amazon:queue:dashboard:back', 'Back to Queue Manager', ButtonStyle.Primary))]
+      );
+    }
+    throw new UserInputError('This queue draft is no longer current.');
+  }
+
+  private requireTemplates(): AmazonProgramTemplateRepository {
+    if (!this.templates) throw new UserInputError('Program templates are not available in this runtime.');
+    return this.templates;
+  }
+
+  private async programsHome(i: UI) {
+    const rows = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId('amazon:programs:catalog:select')
+        .setPlaceholder('Choose an Amazon program')
+        .addOptions(...listAmazonPrograms().map(program => ({
+          label: program.title,
+          value: program.key,
+          description: 'Amazon.de affiliate program',
+        })))
+    );
+    const templates = this.templates?.activeCount(i.guildId!) ?? 0;
+    return this.show(i,
+      `**Amazon Programs**\nChoose a saved Amazon promotion. Program links use your current Amazon.de tracking ID. No Creators API is required.\n\nTemplates: ${templates} active\nOneLink is optional and separate from program-link generation.`,
+      [rows, buttons(link(ONE_LINK, 'Optional OneLink guide'))],
+    );
+  }
+
+  private async programView(i: UI, key: AmazonProgramKey) {
+    const program = getAmazonProgram(key);
+    let status = '⚠ Missing Affiliate setup';
+    try { this.programLinks.generate(i.guildId!, key); status = '✅ Ready'; } catch { /* display status only */ }
+    return this.show(i,
+      `**${program.title}**\nMarketplace: Amazon.de\nTracking ID: ${status}\nAffiliate link: ${status}\n\nPayouts and eligibility are controlled by Amazon and are intentionally not stored as fixed bot data.`,
+      [
+        buttons(
+          button(`amazon:programs:${key}:create`, 'Create Post', ButtonStyle.Primary),
+          button(`amazon:programs:${key}:link`, 'Show Affiliate Link'),
+          link(program.officialInfoUrl, 'Official Amazon Info'),
+        ),
+        buttons(
+          button(`amazon:programs:${key}:templates`, 'Templates'),
+          button('amazon:programs:catalog:home', 'Back'),
+        ),
+      ],
+    );
+  }
+
+  private async programsAction(i: MessageComponentInteraction | ModalSubmitInteraction, id: string, action: string) {
+    if (id === 'catalog' && action === 'home') return this.programsHome(i);
+    if (id === 'catalog' && action === 'select' && i.isStringSelectMenu()) {
+      return this.programView(i, i.values[0] as AmazonProgramKey);
+    }
+    if (id === 'templates' && action === 'select' && i.isStringSelectMenu()) {
+      const row = this.requireTemplates().get(i.guildId!, Number(i.values[0]));
+      return this.templateView(i, row);
+    }
+    if (!Object.hasOwn(Object.fromEntries(listAmazonPrograms().map(p => [p.key, true])), id)) throw new UserInputError('Unknown Amazon program.');
+    const key = id as AmazonProgramKey;
+    if (action === 'link') {
+      const result = this.programLinks.generate(i.guildId!, key);
+      return this.show(i,
+        `**${result.programName} Affiliate Link — only visible to you**\n<${result.affiliateUrl}>\n\nThis uses the current saved Amazon.de tracking ID. OneLink is not required.`,
+        [buttons(link(result.affiliateUrl, 'Open Amazon'), link(result.officialInfoUrl, 'Official Amazon Info'), button(`amazon:programs:${key}:back`, 'Back'))],
+      );
+    }
+    if (action === 'back') return this.programView(i, key);
+    if (action === 'create' && i.isButton()) {
+      const draftId = i.id;
+      this.programPosts.create(draftId, i.guildId!, i.user.id, 'details', {
+        programKey: key, body: '', templateName: '', revision: this.repo.getGuild(i.guildId!).revision, channelPage: 0,
+      });
+      return i.showModal(this.programPostModal(draftId, key));
+    }
+    if (action === 'templates') return this.programTemplatesView(i);
+    throw new UserInputError('This program control is no longer current.');
+  }
+
+  private programPostModal(id: string, key: AmazonProgramKey, body = '', name = '') {
+    const program = getAmazonProgram(key);
+    const bodyInput = new TextInputBuilder()
+      .setCustomId('body').setLabel('Post text · {affiliate_link} / {program_name}')
+      .setStyle(TextInputStyle.Paragraph).setRequired(true).setMaxLength(1500)
+      .setPlaceholder('**{program_name}**\n\n👉 {affiliate_link}\n\n#Anzeige');
+    if (body) bodyInput.setValue(body.slice(0, 1500));
+    const nameInput = new TextInputBuilder()
+      .setCustomId('name').setLabel('Template name (optional)')
+      .setStyle(TextInputStyle.Short).setRequired(false).setMaxLength(80);
+    if (name) nameInput.setValue(name.slice(0, 80));
+    return new ModalBuilder().setCustomId(`amazon:programpost:${id}:details`).setTitle(program.title)
+      .addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(bodyInput), new ActionRowBuilder<TextInputBuilder>().addComponents(nameInput));
+  }
+
+  private async programChannelView(i: UI, id: string) {
+    const draft = this.programPosts.get(id, i.guildId!, i.user.id);
+    const configured = this.repo.listLinkChannels(i.guildId!).map(row => row.channel_id);
+    const page = await this.getChannelPage(i.guildId!, draft.data.channelPage, configured);
+    draft.data.channelPage = page.page;
+    const rows: ActionRowBuilder<MessageActionRowComponentBuilder>[] = [];
+    const select = this.channelSelectRow(`amazon:programpost:${id}:channel`, page, draft.data.channel ? [draft.data.channel] : []);
+    if (select) rows.push(select);
+    const nav: ButtonBuilder[] = [];
+    if (page.page > 0) nav.push(button(`amazon:programpost:${id}:channel_prev`, 'Previous'));
+    if (page.page + 1 < page.totalPages) nav.push(button(`amazon:programpost:${id}:channel_next`, 'Next'));
+    nav.push(button(`amazon:programpost:${id}:current_channel`, 'Use this channel', ButtonStyle.Primary));
+    nav.push(button(`amazon:programpost:${id}:edit`, 'Edit Post'));
+    nav.push(button(`amazon:programpost:${id}:cancel`, 'Cancel', ButtonStyle.Danger));
+    rows.push(buttons(...nav));
+    return this.show(i,
+      `**Choose a configured Amazon channel**\nAll configured channels are paginated; category names are shown in the list.\n\nPage: **${page.page + 1} / ${page.totalPages}**`,
+      rows,
+    );
+  }
+
+  private renderProgramDraft(guildId: string, data: ProgramPostData) {
+    const linkResult = this.programLinks.generate(guildId, data.programKey);
+    return {
+      linkResult,
+      content: this.programRenderer.render(data.body, { affiliateLink: linkResult.affiliateUrl, programName: linkResult.programName }),
+    };
+  }
+
+  private async programPreview(i: UI, id: string, prefix = '') {
+    const draft = this.programPosts.get(id, i.guildId!, i.user.id);
+    if (this.repo.getGuild(i.guildId!).revision !== draft.data.revision) {
+      throw new UserInputError('Settings changed. Start the program post again so the current tracking ID and channel can be reviewed.');
+    }
+    const rendered = this.renderProgramDraft(i.guildId!, draft.data);
+    const rows = [
+      buttons(
+        button(`amazon:programpost:${id}:publish`, 'Publish', ButtonStyle.Success),
+        button(`amazon:programpost:${id}:save`, 'Save Template'),
+        button(`amazon:programpost:${id}:edit`, 'Edit Post'),
+      ),
+      buttons(button(`amazon:programpost:${id}:back`, 'Back'), button(`amazon:programpost:${id}:cancel`, 'Cancel', ButtonStyle.Danger)),
+    ];
+    return this.show(i, `${prefix}**Preview — not published**\nProgram: ${rendered.linkResult.programName}\nTarget: <#${draft.data.channel}>\n\n${rendered.content}`, rows);
+  }
+
+  private async programPostAction(i: MessageComponentInteraction | ModalSubmitInteraction, id: string, action: string) {
+    const draft = this.programPosts.get(id, i.guildId!, i.user.id);
+    if (draft.step === 'posting') throw new UserInputError('This post is already being sent. Check the selected channel before retrying.');
+    if (action === 'cancel') { this.programPosts.remove(id); return this.show(i, 'Cancelled. No program post was published.'); }
+    if (action === 'details' && i.isModalSubmit()) {
+      draft.data.body = i.fields.getTextInputValue('body').trim();
+      draft.data.templateName = i.fields.getTextInputValue('name').trim();
+      this.programRenderer.validate(draft.data.body);
+      draft.step = 'channel';
+      return this.programChannelView(i, id);
+    }
+    if (action === 'edit' && i.isButton()) return i.showModal(this.programPostModal(id, draft.data.programKey, draft.data.body, draft.data.templateName));
+    if (action === 'back' && i.isButton()) { draft.step = 'channel'; return this.programChannelView(i, id); }
+    if (action === 'channel' && i.isStringSelectMenu()) {
+      if (!i.values[0] || !this.repo.isLinkChannel(i.guildId!, i.values[0])) throw new UserInputError('This channel is not configured. Run /amazon setup first.');
+      await i.deferUpdate();
+      await this.targetChannel(i.guildId!, i.values[0], i.user.id);
+      draft.data.channel = i.values[0];
+      draft.step = 'review';
+      return this.programPreview(i, id);
+    }
+    if (action === 'channel_prev' && i.isButton()) {
+      draft.data.channelPage = Math.max(0, draft.data.channelPage - 1);
+      return this.programChannelView(i, id);
+    }
+    if (action === 'channel_next' && i.isButton()) {
+      draft.data.channelPage += 1;
+      return this.programChannelView(i, id);
+    }
+    if (action === 'current_channel' && i.isButton()) {
+      if (!i.channelId) throw new UserInputError('Start the program flow inside the text channel you want to use, or choose a channel from the picker.');
+      if (!this.repo.isLinkChannel(i.guildId!, i.channelId)) throw new UserInputError('This channel is not configured for Amazon. Run /amazon setup here first.');
+      await i.deferUpdate();
+      await this.targetChannel(i.guildId!, i.channelId, i.user.id);
+      draft.data.channel = i.channelId;
+      draft.step = 'review';
+      return this.programPreview(i, id);
+    }
+    if (action === 'save' && i.isButton()) {
+      if (draft.step !== 'review') throw new UserInputError('Review the post before saving a template.');
+      const repo = this.requireTemplates();
+      const name = draft.data.templateName || `${getAmazonProgram(draft.data.programKey).title} template`;
+      if (draft.data.templateId) repo.update(i.guildId!, draft.data.templateId, { name, body: draft.data.body, channelId: draft.data.channel });
+      else {
+        const saved = repo.create(i.guildId!, { name, programKey: draft.data.programKey, channelId: draft.data.channel, body: draft.data.body, createdBy: i.user.id });
+        draft.data.templateId = saved.id;
+      }
+      return this.programPreview(i, id, '✅ Template saved.\n\n');
+    }
+    if (action === 'publish' && i.isButton()) {
+      if (draft.step !== 'review') throw new UserInputError('Review the post before publishing.');
+      draft.step = 'posting';
+      await i.deferUpdate();
+      try {
+        const channel = await this.targetChannel(i.guildId!, draft.data.channel!, i.user.id);
+        if (this.repo.getGuild(i.guildId!).revision !== draft.data.revision || !this.repo.isLinkChannel(i.guildId!, channel.id)) {
+          throw new UserInputError('Settings changed. Start the program post again so the link and channel can be reviewed.');
+        }
+        const rendered = this.renderProgramDraft(i.guildId!, draft.data);
+        const eventId = `program:${id}`;
+        if (!this.deliveries.reserve(i.guildId!, eventId, channel.id, `program:${draft.data.programKey}`)) {
+          throw new UserInputError('This program post already has a delivery attempt. Check the channel before retrying.');
+        }
+        try {
+          const message = await channel.send({ content: rendered.content, allowedMentions: NO_MENTIONS });
+          this.deliveries.sent(i.guildId!, eventId, message.id);
+        } catch {
+          this.deliveries.unknown(i.guildId!, eventId);
+          throw new UserInputError('Delivery could not be confirmed. Check the target channel; the bot will not automatically resend.');
+        }
+        await this.show(i, `${rendered.linkResult.programName} published in <#${channel.id}>.`);
+      } finally { this.programPosts.remove(id); }
+      return;
+    }
+    throw new UserInputError('This program post control is no longer current.');
+  }
+
+  private async programTemplatesView(i: UI) {
+    const rows = this.requireTemplates().list(i.guildId!);
+    if (!rows.length) return this.show(i, '**Amazon Program Templates**\nNo templates saved yet.', [buttons(button('amazon:programs:catalog:home', 'Back'))]);
+    const select = new StringSelectMenuBuilder().setCustomId('amazon:programs:templates:select').setPlaceholder('Choose template')
+      .addOptions(...rows.slice(0, 25).map(row => ({ label: row.name.slice(0, 100), value: String(row.id), description: `${getAmazonProgram(row.program_key as AmazonProgramKey).title} · ${row.enabled ? 'Enabled' : 'Disabled'}` })));
+    return this.show(i, `**Amazon Program Templates**\n${rows.length} saved. Select one to use or manage it.`, [
+      new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(select),
+      buttons(button('amazon:programs:catalog:home', 'Back')),
+    ]);
+  }
+
+  private async templateView(i: UI, row: AmazonProgramTemplateRow) {
+    const program = getAmazonProgram(row.program_key as AmazonProgramKey);
+    return this.show(i,
+      `**${row.name}**\nProgram: ${program.title}\nChannel: ${row.channel_id ? `<#${row.channel_id}>` : 'Choose when used'}\nStatus: ${row.enabled ? 'Enabled' : 'Disabled'}\n\nStored templates keep placeholders, not generated affiliate URLs.`,
+      [
+        buttons(
+          button(`amazon:template:${row.id}:use`, 'Use', ButtonStyle.Primary),
+          button(`amazon:template:${row.id}:edit`, 'Edit'),
+          button(`amazon:template:${row.id}:toggle`, row.enabled ? 'Disable' : 'Enable'),
+        ),
+        buttons(button(`amazon:template:${row.id}:delete`, 'Delete', ButtonStyle.Danger), button('amazon:programs:catalog:home', 'Back')),
+      ],
+    );
+  }
+
+  private async templateAction(i: MessageComponentInteraction | ModalSubmitInteraction, id: string, action: string) {
+    const repo = this.requireTemplates();
+    const templateId = Number(id);
+    if (!Number.isSafeInteger(templateId) || templateId <= 0) throw new UserInputError('Invalid template.');
+    const row = repo.get(i.guildId!, templateId);
+    if (action === 'use') {
+      if (!row.enabled) throw new UserInputError('Enable this template before using it.');
+      const draftId = i.id;
+      const draft = this.programPosts.create(draftId, i.guildId!, i.user.id, 'channel', {
+        programKey: row.program_key as AmazonProgramKey, body: row.body, templateName: row.name,
+        channel: row.channel_id ?? undefined, revision: this.repo.getGuild(i.guildId!).revision, templateId: row.id, channelPage: 0,
+      });
+      if (draft.data.channel && this.repo.isLinkChannel(i.guildId!, draft.data.channel)) {
+        await this.targetChannel(i.guildId!, draft.data.channel, i.user.id);
+        draft.step = 'review';
+        return this.programPreview(i, draftId);
+      }
+      return this.programChannelView(i, draftId);
+    }
+    if (action === 'edit' && i.isButton()) {
+      const body = new TextInputBuilder().setCustomId('body').setLabel('Template text').setStyle(TextInputStyle.Paragraph).setRequired(true).setMaxLength(1500).setValue(row.body.slice(0,1500));
+      const name = new TextInputBuilder().setCustomId('name').setLabel('Template name').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(80).setValue(row.name.slice(0,80));
+      return i.showModal(new ModalBuilder().setCustomId(`amazon:templateedit:${row.id}:save`).setTitle('Edit program template')
+        .addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(body), new ActionRowBuilder<TextInputBuilder>().addComponents(name)));
+    }
+    if (action === 'toggle') {
+      return this.templateView(i, repo.setEnabled(i.guildId!, row.id, !row.enabled));
+    }
+    if (action === 'delete') {
+      return this.show(i, `**Delete template “${escapeMarkdown(row.name)}”?**\nThis removes the saved template only. It does not delete previously posted Discord messages.`, [
+        buttons(button(`amazon:template:${row.id}:confirmdelete`, 'Delete permanently', ButtonStyle.Danger), button(`amazon:template:${row.id}:back`, 'Cancel')),
+      ]);
+    }
+    if (action === 'confirmdelete') {
+      repo.delete(i.guildId!, row.id);
+      return this.show(i, 'Template deleted.', [buttons(button('amazon:programs:catalog:home', 'Back to Programs'))]);
+    }
+    if (action === 'back') return this.templateView(i, row);
+    throw new UserInputError('This template control is no longer current.');
+  }
+
+  private async templateEditAction(i: MessageComponentInteraction | ModalSubmitInteraction, id: string, action: string) {
+    if (action !== 'save' || !i.isModalSubmit()) throw new UserInputError('This template edit is no longer current.');
+    const repo = this.requireTemplates();
+    const templateId = Number(id);
+    const body = i.fields.getTextInputValue('body').trim();
+    const name = i.fields.getTextInputValue('name').trim();
+    this.programRenderer.validate(body);
+    const current = repo.get(i.guildId!, templateId);
+    return this.templateView(i, repo.update(i.guildId!, templateId, { name, body, channelId: current.channel_id }));
+  }
+
   private async targetChannel(guildId: string, channelId: string, userId?: string) {
     const channel = await this.client.channels.fetch(channelId);
     if (!channel || channel.type !== ChannelType.GuildText || channel.guildId !== guildId) throw new UserInputError('Choose a text channel in this server.');
@@ -257,8 +1186,9 @@ export class AmazonDiscordController {
       result = this.links.generate(m.guildId, input);
       if (!this.deliveries.reserve(m.guildId, `auto:${m.id}`, m.channelId, result.canonicalUrl, 60_000)) return;
       try {
-        const content = `${result.affiliate ? '**Amazon affiliate link**\n' + DISCLOSURE : 'Amazon product link · No affiliate tag added.'}${mode === 'REPLY' ? `\n<${result.url}>` : ''}`;
-        const reply = await m.reply({ content, components: mode === 'BUTTON' ? [buttons(link(result.url, 'View on Amazon'))] : [], allowedMentions: NO_MENTIONS });
+        const inferredTitle = inferProductTitleFromAmazonUrl(input);
+        const content = `${inferredTitle ? `**${escapeMarkdown(inferredTitle)}**\n` : ''}${result.affiliate ? '**Amazon affiliate link**\n' + DISCLOSURE : 'Amazon product link · No affiliate tag added.'}${mode === 'REPLY' ? `\n<${result.url}>` : ''}`;
+        const reply = await m.reply({ content, components: mode === 'BUTTON' ? [buttons(link(result.url, 'Open on Amazon'))] : [], allowedMentions: NO_MENTIONS });
         this.deliveries.sent(m.guildId, `auto:${m.id}`, reply.id);
       } catch { this.deliveries.unknown(m.guildId, `auto:${m.id}`); console.warn(JSON.stringify({ event: 'link_delivery_unknown', guildId: m.guildId, channelId: m.channelId })); }
       return;

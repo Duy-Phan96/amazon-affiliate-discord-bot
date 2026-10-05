@@ -10,6 +10,45 @@ export class AppDatabase {
     CREATE TABLE IF NOT EXISTS link_channels (guild_id TEXT NOT NULL, channel_id TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, PRIMARY KEY(guild_id, channel_id));
     CREATE TABLE IF NOT EXISTS product_watches (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id TEXT NOT NULL, channel_id TEXT NOT NULL, marketplace TEXT NOT NULL, asin TEXT NOT NULL, canonical_url TEXT NOT NULL, watch_type TEXT NOT NULL, threshold_value REAL, last_known_price REAL, last_known_discount REAL, last_alerted_price REAL, last_alerted_discount REAL, last_checked_at TEXT, enabled INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS deal_posts (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id TEXT NOT NULL, channel_id TEXT NOT NULL, marketplace TEXT NOT NULL, asin TEXT NOT NULL, price REAL, discount REAL, posted_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS amazon_program_templates (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      guild_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      program_key TEXT NOT NULL,
+      channel_id TEXT,
+      body TEXT NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      created_by TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS amazon_program_templates_guild_enabled
+      ON amazon_program_templates(guild_id, enabled, updated_at);
+    CREATE TABLE IF NOT EXISTS amazon_post_queues (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      guild_id TEXT NOT NULL UNIQUE,
+      channel_id TEXT,
+      interval_hours INTEGER NOT NULL DEFAULT 24,
+      enabled INTEGER NOT NULL DEFAULT 0,
+      next_run_at INTEGER,
+      created_by TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS amazon_post_queue_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      queue_id INTEGER NOT NULL,
+      position INTEGER NOT NULL,
+      url TEXT NOT NULL,
+      title TEXT,
+      body TEXT,
+      style TEXT NOT NULL DEFAULT 'AUTO',
+      state TEXT NOT NULL DEFAULT 'PENDING',
+      created_at TEXT NOT NULL,
+      sent_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS amazon_post_queue_items_pending
+      ON amazon_post_queue_items(queue_id,state,position,id);
     CREATE TABLE IF NOT EXISTS link_deliveries (
       guild_id TEXT NOT NULL, event_id TEXT NOT NULL, channel_id TEXT NOT NULL,
       product_key TEXT NOT NULL, state TEXT NOT NULL, message_id TEXT, created_at INTEGER NOT NULL,
@@ -22,6 +61,7 @@ export class AppDatabase {
     // Existing installations remain Affiliate. New guild inserts explicitly choose Basic.
     if (!columns.includes('product_mode')) this.db.exec("ALTER TABLE guild_configs ADD COLUMN product_mode TEXT NOT NULL DEFAULT 'AFFILIATE'");
     if (!columns.includes('revision')) this.db.exec('ALTER TABLE guild_configs ADD COLUMN revision INTEGER NOT NULL DEFAULT 0');
+    if (!columns.includes('primary_marketplace')) this.db.exec("ALTER TABLE guild_configs ADD COLUMN primary_marketplace TEXT NOT NULL DEFAULT 'SOURCE'");
   })();
   }
   close(){this.db.close()}

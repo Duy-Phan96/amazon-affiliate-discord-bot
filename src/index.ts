@@ -3,6 +3,9 @@ import { Client, GatewayIntentBits } from 'discord.js';
 import { AppDatabase } from './persistence/Database.js';
 import { ConfigRepository } from './repositories/ConfigRepository.js';
 import { DeliveryRepository } from './repositories/DeliveryRepository.js';
+import { AmazonProgramTemplateRepository } from './repositories/AmazonProgramTemplateRepository.js';
+import { AmazonPostQueueRepository } from './repositories/AmazonPostQueueRepository.js';
+import { AmazonQueueScheduler } from './services/AmazonQueueScheduler.js';
 import { AmazonDiscordController } from './discord/AmazonDiscordController.js';
 async function main() {
   const token = process.env.DISCORD_TOKEN;
@@ -11,17 +14,22 @@ async function main() {
   if (!token || !clientId || !/^\d{17,20}$/.test(clientId) || (guildId && !/^\d{17,20}$/.test(guildId))) throw new Error('Invalid Discord environment configuration');
   const db = new AppDatabase();
   const client = new Client({ rest: { timeout: 15_000, retries: 0 }, intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] });
-  new AmazonDiscordController(client, new ConfigRepository(db), new DeliveryRepository(db), guildId).register();
+  const config = new ConfigRepository(db);
+  const deliveries = new DeliveryRepository(db);
+  const queues = new AmazonPostQueueRepository(db);
+  const scheduler = new AmazonQueueScheduler(client, config, queues, deliveries);
+  new AmazonDiscordController(client, config, deliveries, guildId, new AmazonProgramTemplateRepository(db), queues, scheduler).register();
   client.on('error', () => console.warn(JSON.stringify({ event: 'discord_client_error' })));
-  client.once('ready', () => {
+  client.once('clientReady', () => {
     if (client.user?.id !== clientId) {
       console.error('Discord token and application ID do not match. Stop and check your local .env.');
       client.destroy(); db.close(); process.exitCode = 1; return;
     }
+    scheduler.start();
     console.log(JSON.stringify({ event: 'bot_ready', mode: 'api_free', scope: guildId ? 'test_guild_only' : 'configured_guilds' }));
   });
   let closed = false;
-  const shutdown = () => { if (!closed) { closed = true; client.destroy(); db.close(); } process.exit(0); };
+  const shutdown = () => { if (!closed) { closed = true; scheduler.stop(); client.destroy(); db.close(); } process.exit(0); };
   process.once('SIGINT', shutdown); process.once('SIGTERM', shutdown);
   try {
     // Registration is an explicit, guild-only operation: npm run commands:register.

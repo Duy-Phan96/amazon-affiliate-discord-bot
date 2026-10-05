@@ -6,6 +6,7 @@ import Database from 'better-sqlite3';
 import { AppDatabase } from '../src/persistence/Database.js';
 import { ConfigRepository } from '../src/repositories/ConfigRepository.js';
 import { DeliveryRepository } from '../src/repositories/DeliveryRepository.js';
+import { ProductLinkService } from '../src/services/ProductLinkService.js';
 import type { SetupConfig } from '../src/domain/config.js';
 const a = '123456789012345678'; const b = '123456789012345679';
 const config = (): SetupConfig => ({ productMode:'AFFILIATE',marketplaces:['DE'],tags:{DE:'example-21'},oneLinkDeclared:false,channels:[a],linkMode:'BUTTON' });
@@ -50,5 +51,31 @@ describe('API-free configuration and deliveries', () => {
     try { const legacy=new Database(file);legacy.exec("CREATE TABLE guild_configs(guild_id TEXT PRIMARY KEY,disclosure TEXT NOT NULL DEFAULT '',link_mode TEXT NOT NULL DEFAULT 'OFF',created_at TEXT NOT NULL,updated_at TEXT NOT NULL); INSERT INTO guild_configs(guild_id,created_at,updated_at) VALUES('old','date','date');");legacy.close();
       for(let n=0;n<2;n++){const db=new AppDatabase(file);try {expect(new ConfigRepository(db).getGuild('old').product_mode).toBe('AFFILIATE');}finally{db.close();}}
     } finally {rmSync(directory,{recursive:true,force:true});}
+  });
+});
+
+
+describe('source marketplace links', () => {
+  it('always keeps the marketplace from the pasted product URL', () => {
+    const db = new AppDatabase(':memory:');
+    try {
+      const repo = new ConfigRepository(db);
+      repo.saveSetup('g', {
+        productMode:'AFFILIATE',
+        marketplaces:['DE','US','UK'],
+        tags:{DE:'gamer-de-21',US:'gamer-us-20',UK:'gamer-uk-21'},
+        oneLinkDeclared:true,
+        channels:[a],
+        linkMode:'BUTTON'
+      }, 0);
+
+      const de = new ProductLinkService(repo).generate('g','https://www.amazon.de/dp/B0ABCDEF12');
+      const us = new ProductLinkService(repo).generate('g','https://www.amazon.com/dp/B0ABCDEF12');
+      const uk = new ProductLinkService(repo).generate('g','https://www.amazon.co.uk/dp/B0ABCDEF12');
+
+      expect(de.url).toBe('https://www.amazon.de/dp/B0ABCDEF12?tag=gamer-de-21');
+      expect(us.url).toBe('https://www.amazon.com/dp/B0ABCDEF12?tag=gamer-us-20');
+      expect(uk.url).toBe('https://www.amazon.co.uk/dp/B0ABCDEF12?tag=gamer-uk-21');
+    } finally { db.close(); }
   });
 });

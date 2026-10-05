@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { AmazonDiscordController } from '../src/discord/AmazonDiscordController.js';
 import { amazonCommand } from '../src/discord/commands.js';
 import { hasAffiliateTag } from '../src/services/MessageLinkPolicy.js';
+import { inferProductTitleFromAmazonUrl } from '../src/services/ProductUrlPresentation.js';
 
 const GUILD = '222222222222222222';
 const CHANNEL = '333333333333333333';
@@ -29,16 +30,18 @@ function message(content = PRODUCT) {
     reply: vi.fn(async () => ({ id: '777777777777777777' })) };
 }
 describe('private affiliate link command', () => {
-  it('registered with one required URL and no title or Amazon API inputs', () => {
+  it('keeps the public slash-command surface focused on the main workflows', () => {
     const cmd = amazonCommand.toJSON();
-    const sub = cmd.options?.find(o => o.name === 'link') as any;
-    expect(sub.options).toHaveLength(1); expect(sub.options[0].name).toBe('url'); expect(sub.options[0].required).toBe(true);
+    const names = cmd.options?.map(o => o.name) ?? [];
+    expect(names).toEqual(['post','queue','programs','settings','setup']);
+    const queue = cmd.options?.find(o => o.name === 'queue') as any;
+    expect(queue.options?.map((o:any) => o.name)).toEqual(['manage','import']);
   });
   it('generates disclosed affiliate link privately from DB configuration', async () => {
     const { controller, deliveries } = fixture(); const i = interaction(); await controller.handle(i);
     const payload = i.reply.mock.calls[0][0] as any;
     expect(payload.ephemeral).toBe(true); expect(payload.content).toContain('?tag=test-21');
-    expect(payload.content).toContain('Anzeige'); expect(payload.content).toContain('not verified');
+    expect(payload.content).toContain('#ad · Affiliate link'); expect(payload.content).toContain('not verified');
     expect(deliveries.reserve).not.toHaveBeenCalled(); expect(payload.allowedMentions.parse).toEqual([]);
   });
   it('Basic remains available without accessing any tag', async () => {
@@ -100,4 +103,75 @@ it('tag detection handles encoding, case and empty values conservatively', () =>
   expect(hasAffiliateTag(PRODUCT + '?TAG=test-21')).toBe(true);
   expect(hasAffiliateTag(PRODUCT + '?tag=')).toBe(false);
   expect(hasAffiliateTag('not a URL')).toBe(false);
+});
+
+
+describe('quick public affiliate post command', () => {
+  it('registers /amazon post with URL and optional presentation fields', () => {
+    const cmd = amazonCommand.toJSON();
+    const sub = cmd.options?.find(o => o.name === 'post') as any;
+    expect(sub).toBeTruthy();
+    expect(sub.options?.find((o:any) => o.name === 'url')?.required).toBe(true);
+    expect(sub.options?.some((o:any) => o.name === 'title')).toBe(true);
+    expect(sub.options?.some((o:any) => o.name === 'text')).toBe(true);
+    expect(sub.options?.some((o:any) => o.name === 'style')).toBe(true);
+  });
+
+  it('publishes one affiliate button post in the current configured channel', async () => {
+    const { controller, deliveries } = fixture();
+    const sent = vi.fn(async () => ({ id: '999999999999999998' }));
+    controller.targetChannel = vi.fn(async () => ({ id: CHANNEL, send: sent }));
+    const values: Record<string,string> = { url: PRODUCT, style: 'BUTTON' };
+    const i:any = {
+      commandName:'amazon', guildId:GUILD, channelId:CHANNEL, id:'555555555555555556',
+      user:{id:'444444444444444444'}, memberPermissions:{has:()=>true},
+      isChatInputCommand:()=>true, isMessageComponent:()=>false, isModalSubmit:()=>false,
+      options:{ getSubcommand:()=> 'post', getString:(name:string, required?:boolean)=> values[name] ?? (required ? PRODUCT : null) },
+      deferred:false,replied:false,reply:vi.fn(async()=>undefined)
+    };
+    await controller.handle(i);
+    expect(sent).toHaveBeenCalledTimes(1);
+    const payload = sent.mock.calls[0][0] as any;
+    expect(payload.content).toContain('#ad · Affiliate link');
+    expect(payload.components[0].toJSON().components[0].url).toBe(PRODUCT + '?tag=test-21');
+    expect(deliveries.sent).toHaveBeenCalled();
+  });
+
+  it('infers only a safe title from URL slugs and does not invent product facts', () => {
+    expect(inferProductTitleFromAmazonUrl('https://www.amazon.de/Logitech-G502-X-Gaming-Maus/dp/B0ABCDEF12'))
+      .toBe('Logitech G502 X Gaming Maus');
+    expect(inferProductTitleFromAmazonUrl(PRODUCT)).toBeUndefined();
+  });
+});
+
+
+describe('quick post native Amazon preview', () => {
+  it('AUTO includes the affiliate URL in message content so Discord can unfurl it', async () => {
+    const { controller } = fixture();
+    const sent = vi.fn(async () => ({ id: '999999999999999997' }));
+    controller.targetChannel = vi.fn(async () => ({ id: CHANNEL, send: sent }));
+    const values: Record<string,string> = { url: PRODUCT, style: 'AUTO' };
+    const i:any = {
+      commandName:'amazon', guildId:GUILD, channelId:CHANNEL, id:'555555555555555557',
+      user:{id:'444444444444444444'}, memberPermissions:{has:()=>true},
+      isChatInputCommand:()=>true, isMessageComponent:()=>false, isModalSubmit:()=>false,
+      options:{ getSubcommandGroup:()=>null, getSubcommand:()=> 'post', getString:(name:string, required?:boolean)=> values[name] ?? (required ? PRODUCT : null) },
+      deferred:false,replied:false,reply:vi.fn(async()=>undefined)
+    };
+    await controller.handle(i);
+    const payload = sent.mock.calls[0][0] as any;
+    expect(payload.content).toContain(PRODUCT + '?tag=test-21');
+    expect(payload.content).toContain('#ad · Affiliate link');
+    expect(payload.embeds).toBeUndefined();
+  });
+});
+
+
+describe('queue manager command surface', () => {
+  it('registers /amazon queue manage as the primary queue dashboard entry point', () => {
+    const cmd = amazonCommand.toJSON();
+    const group = cmd.options?.find(o => o.name === 'queue') as any;
+    expect(group).toBeTruthy();
+    expect(group.options?.some((o:any) => o.name === 'manage')).toBe(true);
+  });
 });

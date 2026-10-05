@@ -34,4 +34,20 @@ No real Discord login, command registration, bot invite, message publication, On
 - Review and commit a durable dependency lockfile, dependencies/action maintenance and cross-platform native SQLite installation. The test artifact includes its own resolved lockfile.
 - Review delivery retention/reconciliation, global spam limits and multi-process operation. Product drafts still have no in-place editor and expire on restart.
 
-Only DE/US/UK full product URLs are supported. amzn.to/amzn.eu resolution, extra marketplaces, official live titles/images/prices, product search, automatic deals, watches, Creators API, web dashboard, billing and bounty programs are not implemented in this slice.
+Only DE/US/UK full product URLs are supported. amzn.to/amzn.eu resolution, extra marketplaces, official live titles/images/prices, product search, automatic deals, watches, Creators API, web dashboard and billing are not implemented in the current server-test slice.
+
+## Amazon Programs feature branch
+
+The stacked branch `feat/amazon-programs-foundation` adds the next API-free feature:
+- central Amazon Programs catalog;
+- Amazon Visa, Amazon Prime and Prime Student for Amazon.de;
+- current tracking-ID program-link generation;
+- admin-only `/amazon programs` UI;
+- safe text-template rendering with `{affiliate_link}` / `{program_name}`;
+- persistent program templates;
+- preview-before-publish;
+- existing delivery reservation/unknown-state behavior reused for program posts.
+
+Commission/bounty values are not runtime constants. OneLink remains optional information only.
+
+Recurring schedules are still deferred. This programs branch must pass CI and live Discord testing before it is merged into the VPS test branch.
