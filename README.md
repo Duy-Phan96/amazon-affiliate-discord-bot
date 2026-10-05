@@ -293,7 +293,25 @@ npm install --package-lock-only --ignore-scripts --no-audit --no-fund
 npm ci
 ```
 
-### 3. Configure environment
+### 3. Create a Discord application and bot
+
+Before filling the environment file, create a dedicated Discord application for this project in the **Discord Developer Portal**.
+
+Recommended setup:
+
+1. Create a new application.
+2. Open the **Bot** section and create/enable the bot user.
+3. Copy the bot token into `DISCORD_TOKEN`.
+4. Copy the application's **Application ID / Client ID** into `DISCORD_CLIENT_ID`.
+5. Enable **Message Content Intent** if automatic product-link detection is required.
+6. Invite the bot to the Discord server you want to use.
+7. Enable Discord Developer Mode and copy that server's ID into `DISCORD_GUILD_ID`.
+
+Use a dedicated bot application for this repository rather than reusing credentials from an unrelated production bot.
+
+The bot token is a secret. Never paste it into source files, commits, issues, screenshots or documentation. If a token is exposed, rotate it in the Discord Developer Portal.
+
+### 4. Configure environment
 
 Copy the example:
 
@@ -310,11 +328,17 @@ DISCORD_GUILD_ID=
 DATABASE_PATH=./data/amazon-test.sqlite
 ```
 
+Where these values come from:
+
+- `DISCORD_TOKEN` — Discord Developer Portal → your application → Bot
+- `DISCORD_CLIENT_ID` — Discord Developer Portal → your application → General Information / Application ID
+- `DISCORD_GUILD_ID` — the Discord server ID where commands should be registered and runtime access restricted
+
 Amazon Creators API credentials are optional.
 
 Never commit the real `.env`.
 
-### 4. Validate
+### 5. Validate
 
 ```sh
 npm run test:tooling
@@ -324,7 +348,7 @@ npm test
 npm run doctor
 ```
 
-### 5. Register guild commands
+### 6. Register guild commands
 
 ```sh
 npm run commands:register
@@ -332,7 +356,7 @@ npm run commands:register
 
 Command registration is explicit and guild-scoped for controlled testing. Startup does not silently register commands.
 
-### 6. Start
+### 7. Start
 
 Development:
 
