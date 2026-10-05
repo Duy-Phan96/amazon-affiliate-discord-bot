@@ -1,59 +1,56 @@
 # Amazon Affiliate & Deal Discord Bot
 
-Standalone TypeScript / discord.js prototype for Amazon product/affiliate links. Independent from GamerHQ and other bots.
+**Main purpose: product URL in → your affiliate link out.** Generate a link privately or automatically reply to new untagged Amazon product URLs in selected Discord channels. Independent from GamerHQ. TypeScript / discord.js / SQLite. No Amazon product API required.
 
-> **Current priority: finish API-free V1.** The user deferred Creators API / PA-API to a later version on 2026-09-29. The API diagnostic brief is parked, not the next task. See [V1 scope and acceptance criteria](docs/V1_SCOPE.md).
+> **v0.4.1 — prepared for a controlled server test, not a public release.** Creators API / PA-API, live product data and automatic deal discovery are deferred. Start with [SERVER_TEST.md — German walkthrough](docs/SERVER_TEST.md). Runtime changes live on `feat/api-free-products-20260929`, not on `main` until reviewed and merged.
 
-## Current main-branch snapshot
+## Main workflows
 
-The source on main is still the imported v0.3.0 prototype: DE/US/UK parsing, marketplace-specific affiliate links, SQLite configuration, initial setup/settings/status, selected-channel link replies and a limited future provider abstraction.
+- `/amazon link url:<full product URL>`: private, copyable affiliate link with disclosure and an Amazon button. No product title, channel selection or API needed. Requires saved Affiliate configuration and Manage Server permission.
+- New member message with an untagged Amazon product URL: automatic disclosed reply in configured channels, if BUTTON or REPLY is enabled. Ordinary members need no management permission for this trigger. Their messages are not edited or deleted.
+- `/amazon product`: optional title/note → channel → private preview → explicit public Publish.
+- `/amazon setup`, `/amazon settings`, `/amazon status`, `/amazon guide`: configuration and help.
 
-Basic mode for non-Associates, reviewed manual product posts, transactional setup and restart-safe duplicate protection are the priority development work, not already completed main-branch features. See [implementation status](IMPLEMENTATION_STATUS.md) for the imported baseline and [agent instructions](AGENTS.md) for the current development order.
+Affiliate mode uses your actual tracking ID for the original marketplace. Basic remains selectable for links without affiliate tracking or an Associates account. New unconfigured guilds remain Basic/Off until the operator deliberately configures Affiliate behavior. DE/US/UK are supported; no ID suffix invention or product-domain swaps. Short links (`amzn.to`, `amzn.eu`) must be expanded manually for this test. Product names alone are not a product search.
 
-The current setup saves individual steps immediately. It is not yet a complete Review/Save/Cancel wizard. Use a development server only. No live Amazon price, product title, image, discount or availability is retrieved or simulated.
+OneLink is an **optional Amazon-side setup**, not a second bot-generated link format. The UI records the operator's declaration, not verified account approval, redirection or commission. Read the [OneLink test procedure](docs/SERVER_TEST.md#7-onelink-separat-testen) and the [account/setup/disclosure guide](docs/API_FREE_SETUP.md).
 
-## Local development
+## Local start — dedicated Discord application
 
-Install compatible Node.js (the import used Node 22), then run `npm install`. Copy `.env.example` to `.env` locally and create the database directory (`data/` by default).
+Use Node.js 22.12 or newer (CI uses Node 22). The CI `amazon-server-test` artifact contains source and the lockfile resolved for that test run. In that artifact use `npm ci`. A Git checkout without a committed lockfile must first run `npm install --package-lock-only --ignore-scripts --no-audit --no-fund`, then `npm ci`. Do not confuse the generated bundle lockfile with a reviewed lockfile committed to the repository.
 
-PowerShell:
+Copy `.env.example` to a local `.env` without overwriting an existing file. Fill Discord bot token, application ID and **DISCORD_GUILD_ID** locally. The latter selects and restricts the test server. Marketplace tracking IDs belong in the setup/database, not source defaults. No Amazon API credentials belong in this version.
 
-```powershell
-Copy-Item .env.example .env
-New-Item -ItemType Directory -Force data | Out-Null
-```
-
-macOS / Linux:
-
-```bash
-cp .env.example .env
-mkdir -p data
-```
-
-Fill `DISCORD_TOKEN` and `DISCORD_CLIENT_ID`; optionally set `DISCORD_GUILD_ID` for a test server. Never share or commit .env. Enable Message Content Intent for automatic message-based link handling.
-
-```bash
+```sh
+npm ci
+npm run test:tooling
+npm run test:core
 npm run build
 npm test
-npm run dev
+npm run doctor
+# Open the invite URL printed by doctor. Enable Message Content Intent in the dedicated bot app.
+npm run commands:register
+npm start
 ```
 
-Import validation was blocked by npm registry DNS failure. Dependencies, full build and tests were not confirmed to pass. No Amazon credentials are needed for current link functionality.
+`doctor` is a local check, not a login or permission/OneLink verification. It hides credential values. Registration is now **explicit and guild-only**: it checks token/application correspondence and creates or updates just the named `/amazon` command. It does not bulk-replace other commands and does not register globally. Startup never registers commands. Do not reuse the token of your existing production/GamerHQ bot. With `DISCORD_GUILD_ID` set, message and interaction handling outside that guild are ignored.
 
-## API-free V1 first
+Give the bot View Channel, Send Messages, Embed Links and Read Message History in one test channel. No Administrator permission is requested. All management/manual-link commands require Manage Server; automatic replies can be triggered by ordinary members in the selected channel. Keep the terminal running; Ctrl+C stops it. See the walkthrough for obtaining IDs and troubleshooting missing commands/intents.
 
-Basic mode will share ordinary product links without affiliate tracking. Affiliate mode will use actual per-marketplace IDs, visible disclosures and optional OneLink guidance. Manual product recommendations, easy channel selection, preview/confirmation and reliable persistence come before API work.
+## Safety and current boundaries
 
-OneLink must be configured with Amazon, outside the bot. The existing boolean only records the operator's declaration; it does not configure accounts, verify redirection, prove commissions or certify Discord usage. Single-marketplace and individual-ID use without OneLink remain supported paths. Never derive a foreign tracking ID by changing its suffix or change a product domain to pretend it is a local product.
+Setup is a private draft with Back/Cancel, review, revision checks and transactional Save. Old unselected marketplaces/channels are disabled. Product posts need preview/Publish. Saved settings survive restarts; unfinished forms expire after 15 minutes or restart. Back up existing SQLite files before any upgrade; `.env.example` uses a separate test database.
 
-[German OneLink guide](https://partnernet.amazon.de/help/node/topic/GKHRXG4YEJBTCAFC) · [Amazon integration guide](https://affiliate-program.amazon.com/help/node/topic/GKHRXG4YEJBTCAFC) · [Disclosure guidance](https://partnernet.amazon.de/help/node/topic/GHQNZAU6669EZS98)
+Automatic handling makes at most one reply per source message and suppresses repeats of the same product/channel for 60 seconds. It now **skips existing nonempty affiliate tags**, including your own tags, rather than silently replacing another publisher's attribution. An explicit `/amazon link` request is a separate operator action and can generate a new link from an already-tagged input; the original stays unchanged. Discord bots/webhooks are ignored.
 
-Before public use, verify the actual Amazon/Discord deployment and advertising disclosures. A disclosure string or saved declaration is not a legal approval. [Amazon agreement](https://partnernet.amazon.de/help/operating/agreement/) and [program policies](https://partnernet.amazon.de/help/operating/policies/) are official reference points. This project is not endorsed by Amazon.
+Delivery attempts are recorded before sending. Unknown outcomes are not automatically resent; inspect the channel first. This is duplicate suppression, not exactly-once delivery. Reconciliation/retention, broader spam limits and multi-process guarantees remain open. No scraping, live prices, images, discounts or product availability are provided.
 
-## Deferred version
+Visible affiliate disclosure is included, but operators must separately verify their Amazon account/site/Discord use and provide the required account/site disclosure. A test or OneLink checkbox is not legal approval. The project is not endorsed by Amazon. [Amazon disclosure guidance](https://partnernet.amazon.de/help/node/topic/GHQNZAU6669EZS98), [participation agreement](https://partnernet.amazon.de/help/operating/agreement/) and [policies](https://partnernet.amazon.de/help/operating/policies/).
 
-[Creators API diagnostic brief](docs/CODEX_CREATORS_API_TEST.md): retained for later, not an active implementation instruction. Recheck official documentation when API work is explicitly resumed. No `amazon:api:test` command exists. API product data, automatic deal discovery and product/price monitoring are not part of the current implementation task.
+## Validation and documents
 
-Website, premium subscriptions, hosted onboarding, extra marketplaces and programs/bounties also remain separate future slices.
+The earlier v0.4 implementation passed 35 core plus 14 Vitest tests. Do not use those old results as proof for v0.4.1: inspect the latest PR/CI run. The new suite additionally exercises private affiliate generation, chat replies and local setup tooling with fake data only. A successful run packages tested source with its resolved lockfile; it never connects to a real Discord account or Amazon for these tests.
 
-[Architecture](ARCHITECTURE.md) · [Security](SECURITY.md) · [Implementation status](IMPLEMENTATION_STATUS.md) · [Current V1 scope](docs/V1_SCOPE.md)
+[Server test](docs/SERVER_TEST.md) · [Beginner guide](docs/API_FREE_SETUP.md) · [Implementation status](IMPLEMENTATION_STATUS.md) · [Architecture](ARCHITECTURE.md) · [Scope](docs/V1_SCOPE.md) · [Security](SECURITY.md) · [Agent instructions](AGENTS.md).
+
+The [Creators API diagnostic brief](docs/CODEX_CREATORS_API_TEST.md) is parked for a later version. Website, paid features, bounties and monitoring remain deferred. Do not deploy publicly until live Discord behavior, dependencies and the actual commercial usage are reviewed.

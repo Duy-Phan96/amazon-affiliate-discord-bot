@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": { "outDir": ".core-test-dist", "types": [] },
+  "include": [
+    "src/domain/**/*.ts",
+    "src/services/AmazonUrlParser.ts",
+    "src/services/AmazonAffiliateService.ts",
+    "src/services/ProductLinkService.ts",
+    "src/services/SetupValidation.ts",
+    "src/services/DraftStore.ts"
+  ]
+}

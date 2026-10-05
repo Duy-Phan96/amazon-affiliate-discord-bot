@@ -1,0 +1,42 @@
+name: API-free checks
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Resolve lockfile for this test snapshot
+        run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+      - run: npm ci --no-audit --no-fund
+      - run: npm run test:tooling
+      - run: npm run test:core
+      - run: npm run build
+      - run: npm test
+      - name: Package tested source and resolved lockfile (no credentials)
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/amazon-server-test"
+          git archive HEAD | tar -x -C "$RUNNER_TEMP/amazon-server-test"
+          cp package-lock.json "$RUNNER_TEMP/amazon-server-test/"
+          printf 'Source checkout: %s\nCI run: %s/%s/actions/runs/%s\nNo live Discord or Amazon test was performed. Use docs/SERVER_TEST.md.\n' "$GITHUB_SHA" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" > "$RUNNER_TEMP/amazon-server-test/TEST_BUNDLE.txt"
+          cd "$RUNNER_TEMP/amazon-server-test"
+          test ! -f .env
+          test ! -d node_modules
+          sha256sum package-lock.json >> TEST_BUNDLE.txt
+      - uses: actions/upload-artifact@v7
+        with:
+          name: amazon-server-test
+          path: ${{ runner.temp }}/amazon-server-test/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
