@@ -24,3 +24,14 @@ describe('queue JSON import', () => {
     expect(() => parseQueueImportJson('{"version":1,"interval_hours":3,"posts":[]}')).toThrow(/at least one post/);
   });
 });
+
+
+it('accepts a 100-post bulk import and rejects 101 posts', () => {
+  const post = (index: number) => ({
+    url: `https://www.amazon.com/dp/B0${String(index).padStart(8,'0')}`,
+    name: `Post ${index}`,
+    markdown: `**Post ${index}**\n👉 {affiliate_link}`
+  });
+  expect(parseQueueImportJson(JSON.stringify({version:1,interval_hours:3,posts:Array.from({length:100},(_,i)=>post(i))})).posts).toHaveLength(100);
+  expect(() => parseQueueImportJson(JSON.stringify({version:1,posts:Array.from({length:101},(_,i)=>post(i))}))).toThrow(/100 posts/);
+});

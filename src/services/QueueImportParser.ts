@@ -18,7 +18,7 @@ export function parseQueueImportJson(raw: string): QueueImportDocument {
   const obj = value as Record<string, unknown>;
   if (obj.version !== undefined && obj.version !== 1) throw new UserInputError('Unsupported queue JSON version. Use version 1.');
   if (!Array.isArray(obj.posts) || obj.posts.length < 1) throw new UserInputError('JSON must contain at least one post.');
-  if (obj.posts.length > 50) throw new UserInputError('A single import can contain at most 50 posts.');
+  if (obj.posts.length > 100) throw new UserInputError('A single import can contain at most 100 posts.');
   if (obj.interval_hours !== undefined && (!Number.isInteger(obj.interval_hours) || Number(obj.interval_hours) < 1 || Number(obj.interval_hours) > 168)) {
     throw new UserInputError('interval_hours must be a whole number from 1 to 168.');
   }

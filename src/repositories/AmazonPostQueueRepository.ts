@@ -100,7 +100,7 @@ export class AmazonPostQueueRepository {
   add(guildId: string, createdBy: string, input: { url: string; title?: string | null; body?: string | null; style?: QueueItemStyle }): AmazonQueueItemRow {
     const queue = this.getOrCreate(guildId, createdBy);
     const count = (this.database.db.prepare("SELECT count(*) n FROM amazon_post_queue_items WHERE queue_id=? AND state='PENDING'").get(queue.id) as {n:number}).n;
-    if (count >= 50) throw new UserInputError('The Amazon queue can hold at most 50 pending posts.');
+    if (count >= 100) throw new UserInputError('The Amazon queue can hold at most 100 pending posts.');
     const position = ((this.database.db.prepare('SELECT coalesce(max(position),0) p FROM amazon_post_queue_items WHERE queue_id=?').get(queue.id) as {p:number}).p ?? 0) + 1;
     const now = new Date().toISOString();
     const result = this.database.db.prepare(
@@ -111,7 +111,7 @@ export class AmazonPostQueueRepository {
 
   addMany(guildId: string, createdBy: string, inputs: { url: string; title?: string | null; body?: string | null; style?: QueueItemStyle }[]): AmazonQueueItemRow[] {
     const existing = this.pending(guildId).length;
-    if (existing + inputs.length > 50) throw new UserInputError(`Import would exceed the 50-post queue limit. Current pending: ${existing}.`);
+    if (existing + inputs.length > 100) throw new UserInputError(`Import would exceed the 100-post queue limit. Current pending: ${existing}.`);
     return this.database.db.transaction(() => inputs.map(input => this.add(guildId, createdBy, input)))();
   }
 

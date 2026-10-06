@@ -45,7 +45,7 @@ Upload the file in Discord with:
 
 `/amazon queue import`
 
-The bot validates every entry before importing it.
+The bot validates every entry before importing it. A queue can hold up to **100 pending posts**.
 
 ## Supported JSON fields
 
@@ -53,7 +53,7 @@ The bot validates every entry before importing it.
 
 - `version`: currently `1`
 - `interval_hours`: optional whole number from **1 to 168**
-- `posts`: list of posts to add to the queue
+- `posts`: list of posts to add to the queue (up to **100** in one import)
 
 ### Each post
 
