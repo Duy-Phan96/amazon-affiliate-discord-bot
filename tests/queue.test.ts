@@ -107,3 +107,16 @@ it('accepts custom whole-hour intervals from 1 to 168 and rejects invalid values
     expect(() => repo.updateSettings('g','admin',null,169)).toThrow(/1 to 168/);
   } finally { db.close(); }
 });
+
+
+it('allows up to 100 pending posts and rejects the 101st', () => {
+  const db = new AppDatabase(':memory:');
+  try {
+    const repo = new AmazonPostQueueRepository(db);
+    for (let index = 0; index < 100; index++) {
+      repo.add('g','admin',{url:`https://www.amazon.com/dp/B0${String(index).padStart(8,'0')}`});
+    }
+    expect(repo.pending('g')).toHaveLength(100);
+    expect(() => repo.add('g','admin',{url:'https://www.amazon.com/dp/B099999999'})).toThrow(/100 pending posts/);
+  } finally { db.close(); }
+});

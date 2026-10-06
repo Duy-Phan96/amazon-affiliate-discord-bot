@@ -62,7 +62,7 @@ Supported scheduling:
 
 - quick presets: 3h, 6h, 12h, 24h
 - custom whole-hour interval: **1–168 hours**
-- maximum: **50 pending posts**
+- maximum: **100 pending posts**
 
 If delivery cannot be confirmed, the bot pauses instead of blindly retrying and risking duplicate posts.
 
